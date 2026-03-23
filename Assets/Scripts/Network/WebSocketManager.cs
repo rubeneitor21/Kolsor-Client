@@ -5,7 +5,7 @@ using NativeWebSocket;
 public class WebSocketManager : MonoBehaviour
 {
     // Cambia esto por la IP del servidor cuando lo tengáis en remoto
-    private const string SERVER_URL = "wss://echo.websocket.org";
+    private const string SERVER_URL = "wss://kolsor.garcalia.com";
 
     private WebSocket _socket;
     public bool IsConnected { get; private set; } = false;

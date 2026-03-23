@@ -20,3 +20,4 @@ UserSettings/
 *.mdb
 *.opendb
 *.VC.db
+.vs

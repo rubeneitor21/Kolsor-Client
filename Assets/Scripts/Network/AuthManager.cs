@@ -6,7 +6,7 @@ using System.Collections;
 
 public class AuthManager : MonoBehaviour
 {
-    private const string SERVER_URL = "http://localhost:3000/api";
+    private const string SERVER_URL = "https://kolsor.garcalia.com";
 
     public static AuthManager Instance { get; private set; }
 
@@ -40,7 +40,7 @@ public class AuthManager : MonoBehaviour
         string json = $"{{\"username\":\"{username}\",\"password\":\"{password}\"}}";
         byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
 
-        using var request = new UnityWebRequest(SERVER_URL + "/login", "POST");
+        using var request = new UnityWebRequest(SERVER_URL + "/api/login", "POST");
         request.uploadHandler = new UploadHandlerRaw(bodyRaw);
         request.downloadHandler = new DownloadHandlerBuffer();
         request.SetRequestHeader("Content-Type", "application/json");
@@ -79,7 +79,7 @@ public class AuthManager : MonoBehaviour
         string json = $"{{\"username\":\"{username}\",\"password\":\"{password}\"}}";
         byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
 
-        using var request = new UnityWebRequest(SERVER_URL + "/register", "POST");
+        using var request = new UnityWebRequest(SERVER_URL + "/api/register", "POST");
         request.uploadHandler = new UploadHandlerRaw(bodyRaw);
         request.downloadHandler = new DownloadHandlerBuffer();
         request.SetRequestHeader("Content-Type", "application/json");
