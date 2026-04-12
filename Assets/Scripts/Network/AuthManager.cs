@@ -57,8 +57,7 @@ public class AuthManager : MonoBehaviour
             Debug.Log($"[Auth] ✅ Login correcto: {Username}");
             OnLoginSuccess?.Invoke(Username);
 
-            // Autenticamos también el WebSocket automáticamente
-            AuthenticateWebSocket();
+            StartCoroutine(ConnectAndAuth());
         }
         else
         {
@@ -66,6 +65,34 @@ public class AuthManager : MonoBehaviour
             Debug.LogWarning("[Auth] ❌ Login fallido: " + error.error);
             OnLoginFailed?.Invoke(error.error);
         }
+    }
+
+    private IEnumerator ConnectAndAuth()
+    {
+        // Si ya está conectado, manda auth directamente sin reconectar
+        if (WebSocketManager.Instance.IsConnected)
+        {
+            SendAuth();
+            yield break;
+        }
+
+        // Si no está conectado, conecta primero
+        var connectTask = WebSocketManager.Instance.Connect();
+
+        float timeout = 5f;
+        while (!WebSocketManager.Instance.IsConnected && timeout > 0f)
+        {
+            timeout -= Time.deltaTime;
+            yield return null;
+        }
+
+        if (!WebSocketManager.Instance.IsConnected)
+        {
+            Debug.LogError("[Auth] No se pudo conectar al WebSocket");
+            yield break;
+        }
+
+        SendAuth();
     }
 
     // ── REGISTRO ───────────────────────────────────────────
@@ -101,22 +128,6 @@ public class AuthManager : MonoBehaviour
 
     // ── AUTENTICAR WEBSOCKET ───────────────────────────────
     // Se llama automáticamente tras el login
-    private void AuthenticateWebSocket()
-    {
-        if (!WebSocketManager.Instance.IsConnected)
-        {
-            // Si el WS aún no está listo, esperamos a que se conecte
-            WebSocketManager.OnConnected += SendAuthOnConnect;
-            return;
-        }
-        SendAuth();
-    }
-
-    private void SendAuthOnConnect()
-    {
-        WebSocketManager.OnConnected -= SendAuthOnConnect;
-        SendAuth();
-    }
 
     private void SendAuth()
     {

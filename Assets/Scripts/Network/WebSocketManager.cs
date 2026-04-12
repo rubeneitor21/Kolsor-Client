@@ -4,19 +4,16 @@ using NativeWebSocket;
 
 public class WebSocketManager : MonoBehaviour
 {
-    // Cambia esto por la IP del servidor cuando lo tengáis en remoto
     private const string SERVER_URL = "wss://kolsor.garcalia.com";
 
     private WebSocket _socket;
     public bool IsConnected { get; private set; } = false;
 
-    // Singleton: cualquier script puede acceder con WebSocketManager.Instance
     public static WebSocketManager Instance { get; private set; }
 
-    // Eventos: otros scripts se suscriben para reaccionar a mensajes
     public static event Action OnConnected;
     public static event Action OnDisconnected;
-    public static event Action<string, string> OnMessageReceived; // (tipo, body)
+    public static event Action<string, string> OnMessageReceived;
 
     void Awake()
     {
@@ -26,15 +23,11 @@ public class WebSocketManager : MonoBehaviour
             return;
         }
         Instance = this;
-        DontDestroyOnLoad(gameObject); // Persiste entre escenas
+        DontDestroyOnLoad(gameObject);
+        Application.runInBackground = true;
     }
 
-    async void Start()
-    {
-        await Connect();
-    }
-
-    private async System.Threading.Tasks.Task Connect()
+    public async System.Threading.Tasks.Task Connect()
     {
         _socket = new WebSocket(SERVER_URL);
 
@@ -61,31 +54,87 @@ public class WebSocketManager : MonoBehaviour
         {
             string json = System.Text.Encoding.UTF8.GetString(bytes);
             Debug.Log("[WS] 📨 Recibido: " + json);
-
-            try
-            {
-                ServerMessage msg = JsonUtility.FromJson<ServerMessage>(json);
-                if (msg != null && !string.IsNullOrEmpty(msg.type))
-                    OnMessageReceived?.Invoke(msg.type, msg.body);
-            }
-            catch
-            {
-                Debug.LogWarning("[WS] Mensaje ignorado (no es JSON válido): " + json);
-            }
+            HandleMessage(json);
         };
 
         await _socket.Connect();
     }
 
+    private void HandleMessage(string json)
+    {
+        try
+        {
+            string type = ExtractStringField(json, "type");
+            if (string.IsNullOrEmpty(type)) return;
+
+            string body = ExtractBodyRaw(json);
+            OnMessageReceived?.Invoke(type, body);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[WS] Error procesando mensaje: " + e.Message);
+        }
+    }
+
+    private string ExtractStringField(string json, string key)
+    {
+        string search = $"\"{key}\":\"";
+        int start = json.IndexOf(search);
+        if (start == -1) return "";
+        start += search.Length;
+        int end = json.IndexOf("\"", start);
+        if (end == -1) return "";
+        return json.Substring(start, end - start);
+    }
+
+    private string ExtractBodyRaw(string json)
+    {
+        string marker = "\"body\":";
+        int start = json.IndexOf(marker);
+        if (start == -1) return "";
+        start += marker.Length;
+
+        char first = json[start];
+
+        if (first == '"')
+        {
+            start++;
+            int end = start;
+            while (end < json.Length)
+            {
+                if (json[end] == '"' && json[end - 1] != '\\') break;
+                end++;
+            }
+            return json.Substring(start, end - start);
+        }
+        else if (first == '{' || first == '[')
+        {
+            char open = first;
+            char close = first == '{' ? '}' : ']';
+            int depth = 0, i = start;
+            while (i < json.Length)
+            {
+                if (json[i] == open) depth++;
+                else if (json[i] == close) { depth--; if (depth == 0) return json.Substring(start, i - start + 1); }
+                i++;
+            }
+            return "";
+        }
+        else
+        {
+            int end = start;
+            while (end < json.Length && json[end] != ',' && json[end] != '}') end++;
+            return json.Substring(start, end - start);
+        }
+    }
+
     void Update()
     {
-        // Necesario para que NativeWebSocket procese mensajes
 #if !UNITY_WEBGL || UNITY_EDITOR
         _socket?.DispatchMessageQueue();
 #endif
     }
 
-    // Envía un mensaje al servidor en formato JSON
     public async void Send(string type, string bodyJson = null)
     {
         if (!IsConnected)
@@ -104,7 +153,6 @@ public class WebSocketManager : MonoBehaviour
         await _socket.SendText(json);
     }
 
-    // Shortcut para el ping (el servidor lo exige cada 6 segundos)
     public void SendPing() => Send("ping");
 
     async void OnDestroy()
@@ -112,12 +160,4 @@ public class WebSocketManager : MonoBehaviour
         if (_socket != null)
             await _socket.Close();
     }
-}
-
-// Estructura del mensaje que llega del servidor
-[Serializable]
-public class ServerMessage
-{
-    public string type;
-    public string body;
 }

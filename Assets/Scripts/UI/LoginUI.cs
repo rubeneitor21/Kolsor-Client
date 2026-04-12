@@ -1,5 +1,6 @@
-﻿using UnityEngine;
-using TMPro;
+﻿using TMPro;
+using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class LoginUI : MonoBehaviour
 {
@@ -78,8 +79,7 @@ public class LoginUI : MonoBehaviour
     private void OnLoginSuccess(string username)
     {
         SetLoginButtons(true);
-        Debug.Log("Login OK, ir al lobby...");
-        // Aquí cargaremos la escena del lobby
+        SceneManager.LoadScene("LobbyScene");
     }
 
     private void OnLoginFailed(string error)
