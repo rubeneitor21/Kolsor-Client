@@ -26,6 +26,10 @@ public class LobbyManager : MonoBehaviour
         WebSocketManager.OnMessageReceived -= HandleMessage;
     }
 
+    // Añade esta variable estática
+    public static string PendingRollsBody { get; set; } = "";
+
+    // En HandleMessage, añade el case game-rolls:
     private void HandleMessage(string type, string body)
     {
         switch (type)
@@ -33,16 +37,18 @@ public class LobbyManager : MonoBehaviour
             case "matchmaking-search":
                 OnSearchStarted?.Invoke();
                 break;
-
             case "matchmaking-join":
                 var joinData = JsonUtility.FromJson<MatchmakingJoinBody>(body);
                 OnMatchmakingJoin?.Invoke(joinData?.message ?? "En sala...");
                 break;
-
             case "game-start":
                 var startData = JsonUtility.FromJson<GameStartData>(body);
                 SaveGameData(startData);
+                PendingRollsBody = ""; // limpia rolls anteriores
                 OnGameStart?.Invoke(startData);
+                break;
+            case "game-rolls":
+                PendingRollsBody = body; // guarda para que GameManager lo recoja
                 break;
         }
     }
