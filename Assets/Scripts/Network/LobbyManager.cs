@@ -48,7 +48,11 @@ public class LobbyManager : MonoBehaviour
                 OnGameStart?.Invoke(startData);
                 break;
             case "game-rolls":
-                PendingRollsBody = body; // guarda para que GameManager lo recoja
+                // Guardamos el mensaje COMPLETO (no solo el body)
+                // porque el "user" viene fuera del body
+                PendingRollsBody = body;
+                // Si GameManager ya está activo, procesarlo ahora
+                GameManager.Instance?.ParseRolls(body);
                 break;
         }
     }

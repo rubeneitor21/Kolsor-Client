@@ -1,18 +1,19 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.SceneManagement;
 
 public class GameManager : MonoBehaviour
 {
     public static GameManager Instance { get; private set; }
 
-    // Los 6 dados de cada jugador (de los 10 que manda el servidor, usamos los primeros 6)
-    public List<DiceData> MyDice { get; private set; } = new List<DiceData>();
-    public List<DiceData> EnemyDice { get; private set; } = new List<DiceData>();
+    public List<DiceData> MyDice { get; private set; } = new();
+    public List<DiceData> EnemyDice { get; private set; } = new();
+
+    // Estado del juego recibido del servidor
+    public GameState CurrentState { get; private set; }
+    public bool IsMyTurn => CurrentState?.activePlayer == GameData.MyId;
 
     public string OpponentName => GameData.OpponentName;
-    public bool IsMyTurn => GameData.PlayerStartId == GameData.MyId;
 
     void Awake()
     {
@@ -25,99 +26,91 @@ public class GameManager : MonoBehaviour
         Debug.Log("[Game] GameManager.Start() ejecutado");
         Debug.Log($"[Game] MyId: '{GameData.MyId}'");
         Debug.Log($"[Game] OpponentId: '{GameData.OpponentId}'");
-        Debug.Log($"[Game] PendingRolls vac�o: {string.IsNullOrEmpty(LobbyManager.PendingRollsBody)}");
+        Debug.Log($"[Game] PendingRolls vacío: {string.IsNullOrEmpty(LobbyManager.PendingRollsBody)}");
 
+        NotifyBoardReady();
+    }
+
+    public void NotifyBoardReady()
+    {
         if (!string.IsNullOrEmpty(LobbyManager.PendingRollsBody))
         {
-            Debug.Log("[Game] Procesando rolls pendientes...");
+            Debug.Log("[Game] NotifyBoardReady: procesando rolls pendientes...");
             ParseRolls(LobbyManager.PendingRollsBody);
             LobbyManager.PendingRollsBody = "";
         }
     }
 
-    void OnEnable()
-    {
-        WebSocketManager.OnMessageReceived += HandleMessage;
-    }
-
-    void OnDisable()
-    {
-        WebSocketManager.OnMessageReceived -= HandleMessage;
-    }
+    void OnEnable() => WebSocketManager.OnMessageReceived += HandleMessage;
+    void OnDisable() => WebSocketManager.OnMessageReceived -= HandleMessage;
 
     private void HandleMessage(string type, string body)
     {
-        if (type == "game-rolls")
-            ParseRolls(body);
+        switch (type)
+        {
+            case "game-rolls":
+                ParseRolls(body);
+                break;
+        }
     }
 
-    private bool _rollsPending = false;
-
-    private void ParseRolls(string json)
+    public void ParseRolls(string json)
     {
-        MyDice.Clear();
-        EnemyDice.Clear();
+        // El JSON tiene forma:
+        // {"rolls":[{"face":"Axe","energy":false},...]}
+        // Y el "user" está fuera del body, así que LobbyManager lo pasa junto
 
-        var myDiceJson = ExtractArrayForId(json, GameData.MyId);
-        var enemyDiceJson = ExtractArrayForId(json, GameData.OpponentId);
+        // Extraemos los dados del array "rolls"
+        string rollsArray = ExtractArray(json, "rolls");
+        if (string.IsNullOrEmpty(rollsArray))
+        {
+            Debug.LogWarning("[Game] No se encontró el array 'rolls' en: " + json);
+            return;
+        }
 
-        MyDice = ParseDiceArray(myDiceJson, isMyDice: true);
-        EnemyDice = ParseDiceArray(enemyDiceJson, isMyDice: false);
+        // Extraemos el ID del usuario (viene en el mismo JSON del mensaje completo)
+        string userId = ExtractStringValue(json, "user");
 
-        if (MyDice.Count > 6) MyDice = MyDice.GetRange(0, 6);
-        if (EnemyDice.Count > 6) EnemyDice = EnemyDice.GetRange(0, 6);
+        var dice = ParseDiceArray(rollsArray);
 
-        Debug.Log($"[Game] Dados m�os: {MyDice.Count} | Dados rival: {EnemyDice.Count}");
+        Debug.Log($"[Game] Rolls para {userId}: {dice.Count} dados");
 
-        if (BoardManager.Instance != null)
-            BoardManager.Instance.SpawnDice();
+        if (userId == GameData.MyId)
+        {
+            MyDice = dice;
+            foreach (var d in MyDice) d.isMyDice = true;
+        }
         else
-            _rollsPending = true;  // BoardManager no est� listo, lo guardaremos
-    }
-
-    // A�ade este m�todo para que BoardManager lo llame cuando est� listo
-    public void NotifyBoardReady()
-    {
-        if (_rollsPending && MyDice.Count > 0)
         {
-            _rollsPending = false;
-            BoardManager.Instance.SpawnDice();
+            EnemyDice = dice;
+            foreach (var d in EnemyDice) d.isMyDice = false;
         }
-    }
 
-    private string ExtractArrayForId(string json, string id)
-    {
-        string search = $"\"{id}\":[";
-        int start = json.IndexOf(search);
-        if (start == -1) return "[]";
-        start += search.Length - 1; // apunta al [
-
-        int depth = 0, i = start;
-        while (i < json.Length)
+        // Actualizar estado si viene incluido
+        string stateJson = ExtractObject(json, "state");
+        if (!string.IsNullOrEmpty(stateJson))
         {
-            if (json[i] == '[') depth++;
-            else if (json[i] == ']') { depth--; if (depth == 0) return json.Substring(start, i - start + 1); }
-            i++;
+            CurrentState = JsonUtility.FromJson<GameState>(stateJson);
+            Debug.Log($"[Game] Estado: {CurrentState?.state} | Turno: {CurrentState?.activePlayer}");
         }
-        return "[]";
+
+        BoardManager.Instance?.SpawnDice();
     }
 
-    private List<DiceData> ParseDiceArray(string arrayJson, bool isMyDice)
+    // ── Helpers de parseo ─────────────────────────────────
+
+    private List<DiceData> ParseDiceArray(string arrayJson)
     {
         var result = new List<DiceData>();
-
-        // Cada dado tiene forma: {"face":"Axe","energy":false}
         int i = 0;
         while (i < arrayJson.Length)
         {
-            int objStart = arrayJson.IndexOf('{', i);
-            if (objStart == -1) break;
+            int start = arrayJson.IndexOf('{', i);
+            if (start == -1) break;
+            int end = arrayJson.IndexOf('}', start);
+            if (end == -1) break;
 
-            int objEnd = arrayJson.IndexOf('}', objStart);
-            if (objEnd == -1) break;
-
-            string obj = arrayJson.Substring(objStart, objEnd - objStart + 1);
-
+            string obj = arrayJson.Substring(start, end - start + 1);
             string faceStr = ExtractStringValue(obj, "face");
             bool energy = obj.Contains("\"energy\":true");
 
@@ -128,14 +121,46 @@ public class GameManager : MonoBehaviour
                     face = face,
                     energy = energy,
                     kept = false,
-                    isMyDice = isMyDice
+                    isMyDice = false // se asigna después
                 });
             }
-
-            i = objEnd + 1;
+            i = end + 1;
         }
-
         return result;
+    }
+
+    private string ExtractArray(string json, string key)
+    {
+        string marker = $"\"{key}\":[";
+        int start = json.IndexOf(marker);
+        if (start == -1) return "";
+        start += marker.Length - 1;
+
+        int depth = 0, i = start;
+        while (i < json.Length)
+        {
+            if (json[i] == '[') depth++;
+            else if (json[i] == ']') { depth--; if (depth == 0) return json.Substring(start, i - start + 1); }
+            i++;
+        }
+        return "";
+    }
+
+    private string ExtractObject(string json, string key)
+    {
+        string marker = $"\"{key}\":{{";
+        int start = json.IndexOf(marker);
+        if (start == -1) return "";
+        start += marker.Length - 1;
+
+        int depth = 0, i = start;
+        while (i < json.Length)
+        {
+            if (json[i] == '{') depth++;
+            else if (json[i] == '}') { depth--; if (depth == 0) return json.Substring(start, i - start + 1); }
+            i++;
+        }
+        return "";
     }
 
     private string ExtractStringValue(string json, string key)
@@ -147,4 +172,13 @@ public class GameManager : MonoBehaviour
         int end = json.IndexOf("\"", start);
         return end == -1 ? "" : json.Substring(start, end - start);
     }
+}
+
+// ── Estructuras de estado ──────────────────────────────────
+[System.Serializable]
+public class GameState
+{
+    public string state;
+    public int round;
+    public string activePlayer;
 }

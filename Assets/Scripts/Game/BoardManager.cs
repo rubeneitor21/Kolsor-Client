@@ -7,6 +7,54 @@ public class BoardManager : MonoBehaviour
 
     [Header("Prefabs")]
     public GameObject dicePrefab;
+    public GameObject stonePrefab;
+
+    [Header("Piedras de vida")]
+    public Transform playerStonesOrigin;   // punto de inicio fila del jugador
+    public Transform opponentStonesOrigin; // punto de inicio fila del rival
+
+    private List<GameObject> _playerStones = new();
+    private List<GameObject> _opponentStones = new();
+
+    // Llama a esto desde Start() después de NotifyBoardReady()
+    public void SpawnStones(int playerCount = 15, int opponentCount = 15)
+    {
+        ClearStones();
+        SpawnStoneRow(playerCount, playerStonesOrigin, _playerStones);
+        SpawnStoneRow(opponentCount, opponentStonesOrigin, _opponentStones);
+    }
+
+    private void SpawnStoneRow(int count, Transform origin, List<GameObject> list)
+    {
+        int columns = 3;
+        float spacingX = 0.32f;
+        float spacingZ = 0.32f;
+
+        int index = 0;
+        for (int row = 0; row < 5; row++)
+        {
+            for (int col = 0; col < columns; col++)
+            {
+                if (index >= count) break;
+
+                Vector3 pos = origin.position
+                    + Vector3.right * col * spacingX
+                    + Vector3.forward * row * spacingZ;
+
+                var obj = Instantiate(stonePrefab, pos, Quaternion.identity);
+                list.Add(obj);
+                index++;
+            }
+        }
+    }
+
+    private void ClearStones()
+    {
+        foreach (var obj in _playerStones) if (obj) Destroy(obj);
+        foreach (var obj in _opponentStones) if (obj) Destroy(obj);
+        _playerStones.Clear();
+        _opponentStones.Clear();
+    }
 
     [Header("Posiciones")]
     public Transform myBowlCenter;
@@ -34,6 +82,7 @@ public class BoardManager : MonoBehaviour
     void Start()
     {
         Debug.Log("[Board] BoardManager.Start() ejecutado");
+        SpawnStones();
         GameManager.Instance?.NotifyBoardReady();
     }
 
@@ -90,4 +139,6 @@ public class BoardManager : MonoBehaviour
         _myDiceObjects.Clear();
         _enemyDiceObjects.Clear();
     }
+
+
 }
