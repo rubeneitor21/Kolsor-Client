@@ -48,11 +48,12 @@ public class LobbyManager : MonoBehaviour
                 OnGameStart?.Invoke(startData);
                 break;
             case "game-rolls":
-                // Guardamos el mensaje COMPLETO (no solo el body)
-                // porque el "user" viene fuera del body
+                // Guardamos el body para que GameManager lo procese cuando
+                // GameScene termine de cargar. Si GameManager ya existe,
+                // será él mismo quien procese el evento (está suscrito a
+                // OnMessageReceived), así que aquí no llamamos a ParseRolls
+                // para evitar procesarlo dos veces.
                 PendingRollsBody = body;
-                // Si GameManager ya está activo, procesarlo ahora
-                GameManager.Instance?.ParseRolls(body);
                 break;
         }
     }

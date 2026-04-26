@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 public class GameManager : MonoBehaviour
 {
@@ -12,8 +13,17 @@ public class GameManager : MonoBehaviour
     // Estado del juego recibido del servidor
     public GameState CurrentState { get; private set; }
     public bool IsMyTurn => CurrentState?.activePlayer == GameData.MyId;
+    public bool CanSelect => IsMyTurn
+                              && CurrentState?.state == "select-rolls"
+                              && MyDice != null && MyDice.Count > 0
+                              && !_waitingServer;
 
     public string OpponentName => GameData.OpponentName;
+
+    public static event Action OnRollsChanged;
+    public static event Action OnTurnChanged;
+
+    private bool _waitingServer = false;
 
     void Awake()
     {
@@ -29,6 +39,45 @@ public class GameManager : MonoBehaviour
         Debug.Log($"[Game] PendingRolls vacío: {string.IsNullOrEmpty(LobbyManager.PendingRollsBody)}");
 
         NotifyBoardReady();
+    }
+
+    void Update()
+    {
+        // Atajo temporal hasta tener botón en UI
+        if (Keyboard.current != null && Keyboard.current.spaceKey.wasPressedThisFrame && CanSelect)
+        {
+            Debug.Log("[Game] SPACE → ConfirmSelection");
+            ConfirmSelection();
+        }
+
+        // Detección de clic sobre los dados vía RaycastAll: el cuenco también
+        // tiene Collider y se interpondría delante de los dados. Recorremos
+        // todos los impactos y elegimos el dado mío más cercano a la cámara.
+        if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame && CanSelect)
+        {
+            var cam = Camera.main;
+            if (cam == null) return;
+
+            Vector2 mousePos = Mouse.current.position.ReadValue();
+            Ray ray = cam.ScreenPointToRay(mousePos);
+
+            RaycastHit[] hits = Physics.RaycastAll(ray, 100f);
+            DiceController closest = null;
+            float closestDist = float.MaxValue;
+
+            foreach (var h in hits)
+            {
+                var dice = h.collider.GetComponent<DiceController>();
+                if (dice == null || dice.Data == null || !dice.Data.isMyDice) continue;
+                if (h.distance < closestDist)
+                {
+                    closestDist = h.distance;
+                    closest = dice;
+                }
+            }
+
+            if (closest != null) closest.ToggleKeep();
+        }
     }
 
     public void NotifyBoardReady()
@@ -79,11 +128,17 @@ public class GameManager : MonoBehaviour
         {
             MyDice = dice;
             foreach (var d in MyDice) d.isMyDice = true;
+            // Cuando me toca a mí, los dados del rival ya no son la tirada
+            // actual: los limpiamos para no confundir al jugador.
+            EnemyDice = new List<DiceData>();
         }
         else
         {
             EnemyDice = dice;
             foreach (var d in EnemyDice) d.isMyDice = false;
+            // Cuando es turno del rival, mis dados de la tirada anterior
+            // ya no son seleccionables: limpiamos para evitar confusión.
+            MyDice = new List<DiceData>();
         }
 
         // Actualizar estado si viene incluido
@@ -93,8 +148,57 @@ public class GameManager : MonoBehaviour
             CurrentState = JsonUtility.FromJson<GameState>(stateJson);
             Debug.Log($"[Game] Estado: {CurrentState?.state} | Turno: {CurrentState?.activePlayer}");
         }
+        else if (!string.IsNullOrEmpty(userId))
+        {
+            // El primer game-rolls no incluye "state". Reconstruimos uno mínimo
+            // a partir del campo "user" para que CanSelect funcione.
+            CurrentState = new GameState
+            {
+                state = "select-rolls",
+                round = CurrentState?.round > 0 ? CurrentState.round : 1,
+                activePlayer = userId
+            };
+        }
+
+        _waitingServer = false;
 
         BoardManager.Instance?.SpawnDice();
+        OnRollsChanged?.Invoke();
+        OnTurnChanged?.Invoke();
+    }
+
+    // Llamado por la UI cuando el jugador pulsa "Confirmar selección"
+    public void ConfirmSelection()
+    {
+        if (!CanSelect)
+        {
+            Debug.LogWarning("[Game] ConfirmSelection ignorado: no puedes seleccionar ahora");
+            return;
+        }
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append('[');
+        bool first = true;
+        foreach (var d in MyDice)
+        {
+            if (!d.kept) continue;
+            if (!first) sb.Append(',');
+            first = false;
+            string energy = d.energy ? "true" : "false";
+            sb.Append("{\"face\":\"").Append(d.face).Append("\",\"energy\":").Append(energy).Append('}');
+        }
+        sb.Append(']');
+
+        string body = $"{{\"rolls\":{sb}}}";
+        WebSocketManager.Instance.Send("select-rolls", body);
+
+        // Vaciamos los dados localmente y esperamos al próximo game-rolls
+        MyDice = new List<DiceData>();
+        _waitingServer = true;
+
+        BoardManager.Instance?.SpawnDice();
+        OnRollsChanged?.Invoke();
+        OnTurnChanged?.Invoke();
     }
 
     // ── Helpers de parseo ─────────────────────────────────
