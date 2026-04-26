@@ -4,7 +4,7 @@ using NativeWebSocket;
 
 public class WebSocketManager : MonoBehaviour
 {
-    private const string SERVER_URL = "wss://kolsor.garcalia.com";
+    private const string SERVER_URL = "ws://localhost:3000";
 
     private WebSocket _socket;
     public bool IsConnected { get; private set; } = false;
@@ -68,6 +68,18 @@ public class WebSocketManager : MonoBehaviour
             if (string.IsNullOrEmpty(type)) return;
 
             string body = ExtractBodyRaw(json);
+
+            // El servidor envía "user" fuera del body en game-rolls.
+            // Lo inyectamos dentro para que GameManager pueda parsearlo.
+            if (type == "game-rolls")
+            {
+                string user = ExtractStringField(json, "user");
+                if (!string.IsNullOrEmpty(user) && body.StartsWith("{") && body.Length > 1)
+                {
+                    body = "{\"user\":\"" + user + "\"," + body.Substring(1);
+                }
+            }
+
             OnMessageReceived?.Invoke(type, body);
         }
         catch (Exception e)

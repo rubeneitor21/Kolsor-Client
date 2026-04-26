@@ -16,7 +16,7 @@ public class BoardManager : MonoBehaviour
     private List<GameObject> _playerStones = new();
     private List<GameObject> _opponentStones = new();
 
-    // Llama a esto desde Start() después de NotifyBoardReady()
+    // Llama a esto desde Start() despuï¿½s de NotifyBoardReady()
     public void SpawnStones(int playerCount = 15, int opponentCount = 15)
     {
         ClearStones();
@@ -111,6 +111,12 @@ public class BoardManager : MonoBehaviour
             Vector3 pos = center.position + offsets[i] + Vector3.up * 0.3f;
             var obj = Instantiate(dicePrefab, pos, Quaternion.identity);
             ApplyDiceColor(obj, dice[i]);
+
+            var controller = obj.GetComponent<DiceController>();
+            if (controller == null) controller = obj.AddComponent<DiceController>();
+            controller.Init(dice[i]);
+            controller.ApplyVisual();
+
             objects.Add(obj);
         }
     }
@@ -125,7 +131,7 @@ public class BoardManager : MonoBehaviour
         if (FaceColors.TryGetValue(data.face, out Color color))
             mat.color = color;
 
-        // Borde dorado si tiene energía
+        // Borde dorado si tiene energï¿½a
         if (data.energy)
             mat.SetColor("_EmissionColor", new Color(0.8f, 0.6f, 0.0f) * 2f);
 
