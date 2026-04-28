@@ -4,7 +4,11 @@
       "Bash(mkdir -p \"/tmp/kolsor-server\")",
       "Read(//tmp/**)",
       "Bash(unzip -o \"C:/Users/Iker/Downloads/Kolsor-Server-main.zip\")",
-      "WebSearch"
+      "WebSearch",
+      "Bash(gh repo *)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)"
     ]
   }
 }

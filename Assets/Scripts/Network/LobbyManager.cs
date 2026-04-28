@@ -26,10 +26,11 @@ public class LobbyManager : MonoBehaviour
         WebSocketManager.OnMessageReceived -= HandleMessage;
     }
 
-    // Añade esta variable estática
-    public static string PendingRollsBody { get; set; } = "";
+    // Cola de game-rolls recibidos antes de que cargue GameScene.
+    // Es una lista para que ambos rolls (el mío y el del rival) queden
+    // almacenados aunque lleguen antes de que la escena esté lista.
+    public static readonly System.Collections.Generic.List<string> PendingRollsBodies = new();
 
-    // En HandleMessage, añade el case game-rolls:
     private void HandleMessage(string type, string body)
     {
         switch (type)
@@ -44,16 +45,13 @@ public class LobbyManager : MonoBehaviour
             case "game-start":
                 var startData = JsonUtility.FromJson<GameStartData>(body);
                 SaveGameData(startData);
-                PendingRollsBody = ""; // limpia rolls anteriores
+                PendingRollsBodies.Clear();
                 OnGameStart?.Invoke(startData);
                 break;
             case "game-rolls":
-                // Guardamos el body para que GameManager lo procese cuando
-                // GameScene termine de cargar. Si GameManager ya existe,
-                // será él mismo quien procese el evento (está suscrito a
-                // OnMessageReceived), así que aquí no llamamos a ParseRolls
-                // para evitar procesarlo dos veces.
-                PendingRollsBody = body;
+                // Acumulamos, no sobreescribimos: en el inicio de ronda el servidor
+                // envía un game-rolls para cada jugador; queremos procesar los dos.
+                PendingRollsBodies.Add(body);
                 break;
         }
     }
