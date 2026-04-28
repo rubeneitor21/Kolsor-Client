@@ -6,8 +6,10 @@ public class LobbyManager : MonoBehaviour
     public static LobbyManager Instance { get; private set; }
 
     public static event Action OnSearchStarted;
-    public static event Action<string> OnMatchmakingJoin;  // mensaje del servidor
+    public static event Action<string> OnMatchmakingJoin;
     public static event Action<GameStartData> OnGameStart;
+
+    public static readonly System.Collections.Generic.List<string> PendingRollsBodies = new();
 
     void Awake()
     {
@@ -16,20 +18,8 @@ public class LobbyManager : MonoBehaviour
         DontDestroyOnLoad(gameObject);
     }
 
-    void OnEnable()
-    {
-        WebSocketManager.OnMessageReceived += HandleMessage;
-    }
-
-    void OnDisable()
-    {
-        WebSocketManager.OnMessageReceived -= HandleMessage;
-    }
-
-    // Cola de game-rolls recibidos antes de que cargue GameScene.
-    // Es una lista para que ambos rolls (el mío y el del rival) queden
-    // almacenados aunque lleguen antes de que la escena esté lista.
-    public static readonly System.Collections.Generic.List<string> PendingRollsBodies = new();
+    void OnEnable() { WebSocketManager.OnMessageReceived += HandleMessage; }
+    void OnDisable() { WebSocketManager.OnMessageReceived -= HandleMessage; }
 
     private void HandleMessage(string type, string body)
     {
@@ -38,37 +28,70 @@ public class LobbyManager : MonoBehaviour
             case "matchmaking-search":
                 OnSearchStarted?.Invoke();
                 break;
+
             case "matchmaking-join":
                 var joinData = JsonUtility.FromJson<MatchmakingJoinBody>(body);
                 OnMatchmakingJoin?.Invoke(joinData?.message ?? "En sala...");
                 break;
+
             case "game-start":
-                var startData = JsonUtility.FromJson<GameStartData>(body);
-                SaveGameData(startData);
+                SaveGameData(body);
                 PendingRollsBodies.Clear();
-                OnGameStart?.Invoke(startData);
+                OnGameStart?.Invoke(null);
                 break;
+
             case "game-rolls":
-                // Acumulamos, no sobreescribimos: en el inicio de ronda el servidor
-                // envía un game-rolls para cada jugador; queremos procesar los dos.
                 PendingRollsBodies.Add(body);
                 break;
         }
     }
 
-    private void SaveGameData(GameStartData data)
+    /// JsonUtility no parsea bien arrays de objetos al nivel raíz.
+    /// Hacemos parseo manual de los players para no perder OpponentName.
+    private void SaveGameData(string body)
     {
-        GameData.MyId = AuthManager.Instance.UserId;
-        GameData.PlayerStartId = data.playerStart;
+        GameData.MyId = AuthManager.Instance != null ? AuthManager.Instance.UserId : "";
+        GameData.PlayerStartId = ExtractStringValue(body, "playerStart");
+        GameData.RoomId = ExtractStringValue(body, "roomId");
 
-        foreach (var p in data.players)
+        // Recorremos los objetos {"id":"...","username":"..."} dentro de "players":[...]
+        int searchFrom = 0;
+        while (true)
         {
-            if (p.id != GameData.MyId)
+            int idStart = body.IndexOf("\"id\":\"", searchFrom);
+            if (idStart == -1) break;
+            idStart += 6;
+            int idEnd = body.IndexOf("\"", idStart);
+            if (idEnd == -1) break;
+            string id = body.Substring(idStart, idEnd - idStart);
+
+            int unameMarker = body.IndexOf("\"username\":\"", idEnd);
+            if (unameMarker == -1) break;
+            unameMarker += 12;
+            int unameEnd = body.IndexOf("\"", unameMarker);
+            if (unameEnd == -1) break;
+            string username = body.Substring(unameMarker, unameEnd - unameMarker);
+
+            if (id != GameData.MyId)
             {
-                GameData.OpponentId = p.id;
-                GameData.OpponentName = p.username;
+                GameData.OpponentId = id;
+                GameData.OpponentName = username;
             }
+
+            searchFrom = unameEnd + 1;
         }
+
+        Debug.Log($"[Lobby] game-start | Yo:{GameData.MyId} | Rival:{GameData.OpponentName} | Empieza:{GameData.PlayerStartId} | Room:{GameData.RoomId}");
+    }
+
+    private string ExtractStringValue(string json, string key)
+    {
+        string search = $"\"{key}\":\"";
+        int start = json.IndexOf(search);
+        if (start == -1) return "";
+        start += search.Length;
+        int end = json.IndexOf("\"", start);
+        return end == -1 ? "" : json.Substring(start, end - start);
     }
 
     public void SearchMatch()
@@ -77,7 +100,6 @@ public class LobbyManager : MonoBehaviour
     }
 }
 
-// ── Estructuras JSON ────────────────────────────────────────
 [System.Serializable]
 public class MatchmakingJoinBody
 {
@@ -89,6 +111,7 @@ public class MatchmakingJoinBody
 public class GameStartData
 {
     public string playerStart;
+    public string roomId;
     public PlayerInfo[] players;
 }
 

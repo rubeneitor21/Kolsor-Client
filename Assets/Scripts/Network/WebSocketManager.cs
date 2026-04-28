@@ -4,7 +4,7 @@ using NativeWebSocket;
 
 public class WebSocketManager : MonoBehaviour
 {
-    private const string SERVER_URL = "wss://kolsor.garcalia.com";
+    private const string SERVER_URL = "ws://localhost:3000";
 
     private WebSocket _socket;
     public bool IsConnected { get; private set; } = false;

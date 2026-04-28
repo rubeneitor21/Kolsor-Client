@@ -30,7 +30,7 @@ public class GameUI : MonoBehaviour
 
     private void OnConfirmClick()
     {
-        GameManager.Instance?.ConfirmSelection();
+        // GameManager.Instance?.ConfirmSelection();
     }
 
     private void Refresh()
@@ -50,7 +50,7 @@ public class GameUI : MonoBehaviour
         if (roundText != null && gm?.CurrentState != null)
             roundText.text = $"Ronda {gm.CurrentState.round}";
 
-        if (confirmButton != null)
-            confirmButton.interactable = gm != null && gm.CanSelect;
+        // if (confirmButton != null)
+        //    confirmButton.interactable = gm != null && gm.CanSelect;
     }
 }
