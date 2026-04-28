@@ -6,7 +6,7 @@ using System.Collections;
 
 public class AuthManager : MonoBehaviour
 {
-    private const string SERVER_URL = "http://localhost:3000";
+    private const string SERVER_URL = "https://kolsor.garcalia.com";
 
     public static AuthManager Instance { get; private set; }
 
