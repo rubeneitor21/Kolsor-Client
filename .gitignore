@@ -21,3 +21,5 @@ UserSettings/
 *.opendb
 *.VC.db
 .vs
+.claude/
+CLAUDE.md
