@@ -18,14 +18,22 @@ public class BoardManager : MonoBehaviour
     public Transform myBowlCenter;
     public Transform enemyBowlCenter;
 
+    [Header("Filas de dados confirmados")]
+    public Transform myKeptRowOrigin;
+    public Transform enemyKeptRowOrigin;
+    public float keptRowSpacing = 0.55f;
+    public float keptYOffset = 0.4f;
+
     [Header("Animación de tirada")]
-    public float rollDuration = 1.0f;       // duración total de la animación
-    public float rollFaceChangeRate = 0.05f; // cada cuántos segundos cambia la cara
+    public float rollDuration = 1.0f;
+    public float rollFaceChangeRate = 0.05f;
 
     private List<GameObject> _playerStones = new();
     private List<GameObject> _opponentStones = new();
     private List<GameObject> _myBowlObjects = new();
     private List<GameObject> _enemyBowlObjects = new();
+    private List<GameObject> _myConfirmedObjects = new();
+    private List<GameObject> _enemyConfirmedObjects = new();
 
     private static readonly Vector3[] BowlOffsets =
     {
@@ -66,10 +74,6 @@ public class BoardManager : MonoBehaviour
 
     // ── Reconstrucción global ────────────────────────────────
 
-    /// Reconstruye los dos cuencos.
-    /// IMPORTANTE: el cuenco propio solo muestra dados REALES si el jugador
-    /// ya pulsó espacio (MyDiceRolled = true). Mientras no, todos los cuencos
-    /// muestran decorativos sincronizados vía RoomId.
     public void RebuildAll()
     {
         ClearAllDice();
@@ -80,18 +84,9 @@ public class BoardManager : MonoBehaviour
                           && gm.MyDice.Count > 0
                           && gm.MyDiceRolled;
 
-        // RNG sembrado con el roomId: ambos clientes generan las mismas caras.
-        int seed = string.IsNullOrEmpty(GameData.RoomId)
-            ? 0
-            : GameData.RoomId.GetHashCode();
+        // Decorativos sincronizados vía RoomId
+        int seed = string.IsNullOrEmpty(GameData.RoomId) ? 0 : GameData.RoomId.GetHashCode();
         var rng = new System.Random(seed);
-
-        // Para mantener sincronía entre ambos clientes, generamos SIEMPRE
-        // las caras decorativas en el mismo orden:
-        //   primer set de 6 = cuenco del playerStart
-        //   segundo set de 6 = cuenco del playerSecond
-        // Cada cliente luego decide cuál de esos sets corresponde a "mi" cuenco
-        // y cuál al "rival" según si es playerStart o no.
 
         var startBowlFaces = GenerateFaces(rng, 6);
         var secondBowlFaces = GenerateFaces(rng, 6);
@@ -100,28 +95,49 @@ public class BoardManager : MonoBehaviour
         var myDecorative = iAmPlayerStart ? startBowlFaces : secondBowlFaces;
         var enemyDecorative = iAmPlayerStart ? secondBowlFaces : startBowlFaces;
 
-        // Cuenco propio
+        // 1. Cuenco propio
         if (showMyReal)
         {
-            // El jugador ya tiró: mostramos los dados reales del servidor
             for (int i = 0; i < gm.MyDice.Count && i < BowlOffsets.Length; i++)
             {
                 Vector3 pos = myBowlCenter.position + BowlOffsets[i] + Vector3.up * 0.3f;
-                _myBowlObjects.Add(SpawnDice(gm.MyDice[i], pos));
+                var obj = SpawnDice(gm.MyDice[i], pos, isMine: true, decorative: false);
+                _myBowlObjects.Add(obj);
             }
         }
         else
         {
-            // No ha tirado todavía: decorativos sincronizados
-            SpawnFromFaces(myDecorative, myBowlCenter, _myBowlObjects);
+            SpawnFromFaces(myDecorative, myBowlCenter, _myBowlObjects, isMine: true, decorative: true);
         }
 
-        // Cuenco rival: siempre decorativos (nunca recibimos sus dados reales)
-        SpawnFromFaces(enemyDecorative, enemyBowlCenter, _enemyBowlObjects);
+        // 2. Cuenco rival: siempre decorativo
+        SpawnFromFaces(enemyDecorative, enemyBowlCenter, _enemyBowlObjects, isMine: false, decorative: true);
+
+        // 3. Filas confirmadas
+        if (gm != null && myKeptRowOrigin != null && gm.MyConfirmed != null)
+        {
+            Vector3 dir = -myKeptRowOrigin.right;
+            for (int i = 0; i < gm.MyConfirmed.Count; i++)
+            {
+                Vector3 pos = myKeptRowOrigin.position + dir * i * keptRowSpacing + Vector3.up * keptYOffset;
+                var obj = SpawnDice(gm.MyConfirmed[i], pos, isMine: true, decorative: false);
+                _myConfirmedObjects.Add(obj);
+            }
+        }
+
+        if (gm != null && enemyKeptRowOrigin != null && gm.EnemyConfirmed != null)
+        {
+            Vector3 dir = -enemyKeptRowOrigin.right;
+            for (int i = 0; i < gm.EnemyConfirmed.Count; i++)
+            {
+                Vector3 pos = enemyKeptRowOrigin.position + dir * i * keptRowSpacing + Vector3.up * keptYOffset;
+                var obj = SpawnDice(gm.EnemyConfirmed[i], pos, isMine: false, decorative: false);
+                _enemyConfirmedObjects.Add(obj);
+            }
+        }
     }
 
-    /// Animación de tirada de los dados propios. Va cambiando rápidamente
-    /// las caras y al final deja las caras reales (las de MyDice).
+    /// Animación de tirada del jugador propio.
     public IEnumerator AnimateMyRoll(List<DiceData> finalDice)
     {
         if (finalDice == null || _myBowlObjects.Count == 0) yield break;
@@ -133,7 +149,6 @@ public class BoardManager : MonoBehaviour
         {
             if (elapsed >= nextChange)
             {
-                // En cada cambio, ponemos caras random a todos los dados
                 for (int i = 0; i < _myBowlObjects.Count; i++)
                 {
                     var randomFace = AllFaces[Random.Range(0, AllFaces.Length)];
@@ -143,7 +158,6 @@ public class BoardManager : MonoBehaviour
                 nextChange = elapsed + rollFaceChangeRate;
             }
 
-            // Pequeño bote vertical para dar sensación de movimiento
             float bounce = Mathf.Abs(Mathf.Sin(elapsed * 20f)) * 0.15f;
             for (int i = 0; i < _myBowlObjects.Count; i++)
             {
@@ -156,12 +170,22 @@ public class BoardManager : MonoBehaviour
             yield return null;
         }
 
-        // Al terminar: dejamos los dados con las caras reales y posición de reposo
+        // Al terminar: caras reales + DiceController activo y enlazado a MyDice
+        // para que el clic funcione.
+        var gm = GameManager.Instance;
         for (int i = 0; i < _myBowlObjects.Count && i < finalDice.Count; i++)
         {
             ApplyDiceColor(_myBowlObjects[i], finalDice[i]);
             Vector3 basePos = myBowlCenter.position + BowlOffsets[i] + Vector3.up * 0.3f;
             _myBowlObjects[i].transform.position = basePos;
+
+            // Conectamos el DiceController al DiceData real para que ToggleKeep
+            // funcione sobre el dato correcto de gm.MyDice.
+            var ctrl = _myBowlObjects[i].GetComponent<DiceController>();
+            if (ctrl == null) ctrl = _myBowlObjects[i].AddComponent<DiceController>();
+            ctrl.enabled = true;
+            ctrl.Init(finalDice[i]);
+            ctrl.SetRestPosition(basePos);
         }
     }
 
@@ -181,20 +205,41 @@ public class BoardManager : MonoBehaviour
         return list;
     }
 
-    private void SpawnFromFaces(List<DiceData> faces, Transform center, List<GameObject> list)
+    private void SpawnFromFaces(List<DiceData> faces, Transform center, List<GameObject> list, bool isMine, bool decorative)
     {
         if (center == null) return;
         for (int i = 0; i < faces.Count && i < BowlOffsets.Length; i++)
         {
             Vector3 pos = center.position + BowlOffsets[i] + Vector3.up * 0.3f;
-            list.Add(SpawnDice(faces[i], pos));
+            list.Add(SpawnDice(faces[i], pos, isMine, decorative));
         }
     }
 
-    private GameObject SpawnDice(DiceData data, Vector3 pos)
+    /// Crea un dado en la posición indicada.
+    /// Si decorative=true, el DiceController se desactiva (no se puede clicar).
+    /// Si decorative=false, el DiceController queda activo y referenciado al
+    /// DiceData real para que ToggleKeep funcione.
+    private GameObject SpawnDice(DiceData data, Vector3 pos, bool isMine, bool decorative)
     {
         var obj = Instantiate(dicePrefab, pos, Quaternion.identity);
         ApplyDiceColor(obj, data);
+
+        var ctrl = obj.GetComponent<DiceController>();
+        if (ctrl == null) ctrl = obj.AddComponent<DiceController>();
+
+        if (decorative)
+        {
+            ctrl.enabled = false;
+        }
+        else
+        {
+            data.isMyDice = isMine;
+            ctrl.enabled = true;
+            ctrl.Init(data);
+            ctrl.SetRestPosition(pos);
+            ctrl.ApplyVisual();
+        }
+
         return obj;
     }
 
@@ -203,17 +248,76 @@ public class BoardManager : MonoBehaviour
         var renderer = obj.GetComponent<Renderer>();
         if (renderer == null) return;
         var mat = renderer.material;
+
         if (FaceColors.TryGetValue(data.face, out Color color)) mat.color = color;
-        if (data.energy) mat.SetColor("_EmissionColor", new Color(0.8f, 0.6f, 0.0f) * 2f);
-        else mat.SetColor("_EmissionColor", Color.black);
+
+        // La emisión la gestiona DiceController.ApplyVisual (para kept).
+        // Aquí solo nos aseguramos de que esté limpia al inicio.
+        mat.EnableKeyword("_EMISSION");
+        mat.SetColor("_EmissionColor", Color.black);
+
+        // Borde dorado para dados con energía (sin tocar el material principal).
+        ApplyEnergyHalo(obj, data.energy);
+    }
+
+    /// Añade o quita un halo dorado alrededor del dado.
+    /// El halo es un cubo hijo ligeramente más grande con material semitransparente.
+    private void ApplyEnergyHalo(GameObject diceObj, bool hasEnergy)
+    {
+        Transform existing = diceObj.transform.Find("EnergyHalo");
+
+        if (!hasEnergy)
+        {
+            if (existing != null) Destroy(existing.gameObject);
+            return;
+        }
+
+        if (existing != null) return; // ya tiene halo
+
+        var halo = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        halo.name = "EnergyHalo";
+        halo.transform.SetParent(diceObj.transform, worldPositionStays: false);
+        halo.transform.localPosition = Vector3.zero;
+        halo.transform.localRotation = Quaternion.identity;
+        halo.transform.localScale = Vector3.one * 1.12f; // 12% más grande que el dado
+
+        // Quitamos el collider del halo para que no interfiera con los raycasts del clic.
+        var col = halo.GetComponent<Collider>();
+        if (col != null) Destroy(col);
+
+        // Material dorado emisivo, semitransparente.
+        var haloRenderer = halo.GetComponent<Renderer>();
+        var haloMat = new Material(Shader.Find("Standard"));
+        // Modo Transparent del Standard Shader
+        haloMat.SetFloat("_Mode", 3f);
+        haloMat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+        haloMat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+        haloMat.SetInt("_ZWrite", 0);
+        haloMat.DisableKeyword("_ALPHATEST_ON");
+        haloMat.EnableKeyword("_ALPHABLEND_ON");
+        haloMat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+        haloMat.renderQueue = 3000;
+
+        Color gold = new Color(1f, 0.78f, 0.2f, 0.35f);
+        haloMat.color = gold;
+        haloMat.EnableKeyword("_EMISSION");
+        haloMat.SetColor("_EmissionColor", new Color(1f, 0.7f, 0.0f) * 1.2f);
+
+        haloRenderer.material = haloMat;
+        haloRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        haloRenderer.receiveShadows = false;
     }
 
     private void ClearAllDice()
     {
         foreach (var obj in _myBowlObjects) if (obj) Destroy(obj);
         foreach (var obj in _enemyBowlObjects) if (obj) Destroy(obj);
+        foreach (var obj in _myConfirmedObjects) if (obj) Destroy(obj);
+        foreach (var obj in _enemyConfirmedObjects) if (obj) Destroy(obj);
         _myBowlObjects.Clear();
         _enemyBowlObjects.Clear();
+        _myConfirmedObjects.Clear();
+        _enemyConfirmedObjects.Clear();
     }
 
     // ── Piedras de vida ──────────────────────────────────────

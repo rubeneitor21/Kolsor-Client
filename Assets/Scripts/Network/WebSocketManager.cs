@@ -69,11 +69,12 @@ public class WebSocketManager : MonoBehaviour
 
             string body = ExtractBodyRaw(json);
 
-            // El servidor envía "user" fuera del body en game-rolls.
-            // Lo inyectamos dentro para que GameManager pueda parsearlo.
             if (type == "game-rolls")
             {
-                string user = ExtractStringField(json, "user");
+                // Extraemos "user" SOLO a nivel raíz, no de objetos anidados.
+                // El JSON puede tener un previousTurn.user dentro del body que
+                // confundiría al ExtractStringField normal.
+                string user = ExtractRootStringField(json, "user");
                 if (!string.IsNullOrEmpty(user) && body.StartsWith("{") && body.Length > 1)
                 {
                     body = "{\"user\":\"" + user + "\"," + body.Substring(1);
@@ -86,6 +87,73 @@ public class WebSocketManager : MonoBehaviour
         {
             Debug.LogWarning("[WS] Error procesando mensaje: " + e.Message);
         }
+    }
+
+    /// Extrae un campo string del nivel raíz del JSON, ignorando objetos anidados.
+    /// Extrae un campo string del nivel raíz del JSON, ignorando objetos anidados.
+    /// Recorre el JSON contando llaves y solo coincide con la clave cuando está
+    /// en el nivel raíz (depth == 1).
+    private string ExtractRootStringField(string json, string key)
+    {
+        if (string.IsNullOrEmpty(json)) return "";
+
+        string search = $"\"{key}\":\"";
+        int depth = 0;
+        int i = 0;
+
+        while (i < json.Length)
+        {
+            char c = json[i];
+
+            if (c == '{')
+            {
+                depth++;
+                i++;
+                continue;
+            }
+            if (c == '}')
+            {
+                depth--;
+                i++;
+                continue;
+            }
+
+            // Cuando estamos en el nivel raíz (depth == 1), comprobamos si
+            // la posición actual coincide con la clave que buscamos.
+            if (depth == 1 && c == '"'
+                && i + search.Length <= json.Length
+                && json.Substring(i, search.Length) == search)
+            {
+                int start = i + search.Length;
+                int end = json.IndexOf('"', start);
+                if (end == -1) return "";
+                return json.Substring(start, end - start);
+            }
+
+            // Si estamos dentro de una string que NO es la que buscamos
+            // (por ejemplo el contenido de un valor o una clave que no nos interesa),
+            // la saltamos para no contar mal las llaves que pueda contener.
+            if (c == '"')
+            {
+                int strEnd = i + 1;
+                while (strEnd < json.Length)
+                {
+                    if (json[strEnd] == '\\' && strEnd + 1 < json.Length)
+                    {
+                        strEnd += 2;
+                        continue;
+                    }
+                    if (json[strEnd] == '"') break;
+                    strEnd++;
+                }
+                i = strEnd + 1;
+                continue;
+            }
+
+            i++;
+        }
+
+        return "";
     }
 
     private string ExtractStringField(string json, string key)
