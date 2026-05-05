@@ -8,38 +8,41 @@ public class GameManager : MonoBehaviour
 {
     public static GameManager Instance { get; private set; }
 
-    // Dados de la tirada actual del jugador activo (los del cuenco).
+    // Dados de la tirada actual (cuenco propio).
+    // Se llena cuando llega dice-rolled dirigido a mí.
     public List<DiceData> MyDice { get; private set; } = new();
 
-    // Dados confirmados acumulados a lo largo de la ronda (filas laterales).
-    // Se reconstruyen desde state.users[id].selectedRolls cada game-rolls.
+    // Dados confirmados acumulados (la fila lateral).
+    // Se reconstruyen desde state.users[id].selectedRolls cuando confirmamos.
     public List<DiceData> MyConfirmed { get; private set; } = new();
     public List<DiceData> EnemyConfirmed { get; private set; } = new();
 
-    // false hasta que el jugador pulse espacio para tirar
-    public bool MyDiceRolled { get; private set; } = false;
-
+    // Estado del juego
     public GameState CurrentState { get; private set; }
     public bool IsMyTurn => CurrentState?.activePlayer == GameData.MyId;
     public string OpponentName => GameData.OpponentName;
 
+    // Banderas de control
+    public bool MyDiceRolled { get; private set; } = false;
+    public bool GameStarted { get; private set; } = false;
+
     public bool CanRoll => IsMyTurn
                            && CurrentState?.state == "select-rolls"
-                           && MyDice != null && MyDice.Count > 0
                            && !MyDiceRolled
                            && !InputBlocked
                            && !_animating
-                           && !_waitingServer;
+                           && !_waitingServer
+                           && GameStarted;
 
     public bool CanConfirm => IsMyTurn
                               && CurrentState?.state == "select-rolls"
-                              && MyDice != null && MyDice.Count > 0
                               && MyDiceRolled
+                              && MyDice != null && MyDice.Count > 0
                               && !InputBlocked
                               && !_animating
                               && !_waitingServer;
 
-    public bool CanClickDice => CanConfirm; // mismas condiciones
+    public bool CanClickDice => CanConfirm;
 
     public static event Action OnRollsChanged;
     public static event Action OnTurnChanged;
@@ -61,7 +64,20 @@ public class GameManager : MonoBehaviour
     {
         Debug.Log("[Game] GameManager.Start()");
         Debug.Log($"[Game] MyId:'{GameData.MyId}' | OpponentId:'{GameData.OpponentId}' | RoomId:'{GameData.RoomId}'");
-        NotifyBoardReady();
+
+        // Al cargar GameScene, marcamos que el juego ha empezado y
+        // construimos el estado inicial: ronda 1, turno del playerStart.
+        GameStarted = true;
+        CurrentState = new GameState
+        {
+            state = "select-rolls",
+            round = 1,
+            activePlayer = GameData.PlayerStartId
+        };
+        MyConfirmed.Clear();
+        EnemyConfirmed.Clear();
+
+        BoardManager.Instance?.RebuildAll();
     }
 
     void Update()
@@ -70,8 +86,10 @@ public class GameManager : MonoBehaviour
         {
             if (CanRoll)
             {
-                Debug.Log("[Game] SPACE → Tirar mis dados");
-                StartCoroutine(RollMyDiceAnimation());
+                Debug.Log("[Game] SPACE → roll-dice");
+                WebSocketManager.Instance.Send("roll-dice");
+                _waitingServer = true;
+                OnTurnChanged?.Invoke();
             }
             else if (CanConfirm)
             {
@@ -80,23 +98,39 @@ public class GameManager : MonoBehaviour
             }
         }
 
-        // Clic sobre los dados de mi cuenco
-        if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame && CanClickDice)
+        // TEST temporal: log de cualquier interacción con el ratón
+        if (Mouse.current == null)
         {
-            HandleDiceClick();
+            if (Time.frameCount % 300 == 0) Debug.Log("[Game] Mouse.current es NULL");
+        }
+        else
+        {
+            if (Mouse.current.leftButton.wasPressedThisFrame)
+            {
+                Debug.Log($"[Game] CLICK izquierdo detectado | CanClickDice={CanClickDice}");
+                if (CanClickDice) HandleDiceClick();
+            }
+            if (Mouse.current.rightButton.wasPressedThisFrame)
+            {
+                Debug.Log("[Game] CLICK derecho detectado");
+            }
         }
     }
 
     private void HandleDiceClick()
     {
         var cam = Camera.main;
-        if (cam == null) { Debug.LogWarning("[Game] No hay Camera.main"); return; }
+        if (cam == null)
+        {
+            Debug.LogWarning("[Game] Camera.main es NULL — la cámara no tiene tag MainCamera");
+            return;
+        }
 
         Vector2 mousePos = Mouse.current.position.ReadValue();
         Ray ray = cam.ScreenPointToRay(mousePos);
 
         RaycastHit[] hits = Physics.RaycastAll(ray, 100f);
-        Debug.Log($"[Game] Raycast: {hits.Length} hits");
+        Debug.Log($"[Game] Raycast desde ({mousePos.x:F0},{mousePos.y:F0}) → {hits.Length} hits");
 
         DiceController closest = null;
         float closestDist = float.MaxValue;
@@ -104,9 +138,9 @@ public class GameManager : MonoBehaviour
         foreach (var h in hits)
         {
             var dice = h.collider.GetComponent<DiceController>();
+            Debug.Log($"[Game]   hit: {h.collider.gameObject.name} | dice={(dice != null ? "OK" : "NULL")}");
+
             if (dice == null || dice.Data == null || !dice.Data.isMyDice) continue;
-            // Permitimos clicar tanto dados sin marcar (para marcar) como marcados
-            // (para desmarcar). ToggleKeep alterna kept en cualquiera de los dos casos.
             if (h.distance < closestDist)
             {
                 closestDist = h.distance;
@@ -125,97 +159,135 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    public void NotifyBoardReady()
-    {
-        var pending = LobbyManager.PendingRollsBodies;
-        if (pending.Count == 0) return;
-
-        Debug.Log($"[Game] Procesando {pending.Count} rolls pendientes");
-        foreach (var body in pending) ParseRolls(body);
-        pending.Clear();
-    }
-
     private void HandleMessage(string type, string body)
     {
         switch (type)
         {
-            case "game-rolls":
-                ParseRolls(body);
+            case "dice-rolled":
+                HandleDiceRolled(body);
+                break;
+            case "selection-confirmed":
+                HandleSelectionConfirmed(body);
+                break;
+            case "round-start":
+                HandleRoundStart(body);
                 break;
         }
     }
 
-    public void ParseRolls(string json)
+    /// El servidor confirma que un jugador (yo o el rival) ha tirado.
+    /// Body: { user, rolls: [...], round }
+    private void HandleDiceRolled(string body)
     {
-        string activeUser = ExtractStringValue(json, "user");
-        bool isMe = (activeUser == GameData.MyId);
-
-        string rollsArray = ExtractArray(json, "rolls");
-        var currentRolls = string.IsNullOrEmpty(rollsArray)
+        string user = ExtractStringValue(body, "user");
+        string rollsArray = ExtractArray(body, "rolls");
+        var rolls = string.IsNullOrEmpty(rollsArray)
             ? new List<DiceData>()
             : ParseDiceArray(rollsArray);
 
-        Debug.Log($"[Game] game-rolls para {(isMe ? "YO" : "RIVAL")} | dados: {currentRolls.Count}");
+        bool isMe = (user == GameData.MyId);
+        Debug.Log($"[Game] dice-rolled de {(isMe ? "YO" : "RIVAL")} | {rolls.Count} dados");
+        Debug.Log($"[Game] HandleDiceRolled: InputBlocked={InputBlocked} | _animating={_animating} | _waitingServer={_waitingServer}");
 
         if (isMe)
         {
-            MyDice = currentRolls;
+            MyDice = rolls;
             foreach (var d in MyDice) { d.isMyDice = true; d.kept = false; }
-            MyDiceRolled = false;
+            Debug.Log($"[Game] Antes de animar mi tirada: MyDiceRolled={MyDiceRolled}");
+            StartCoroutine(AnimateMyRollAndUnlock());
         }
         else
         {
-            MyDice.Clear();
-            MyDiceRolled = false;
+            // El rival tira. Animamos su cuenco con sus dados reales.
+            Debug.Log($"[Game] Antes de animar tirada rival: rolls.Count={rolls.Count}");
+            StartCoroutine(AnimateEnemyRollAndUnlock(rolls));
         }
+    }
 
-        // Estado y filas confirmadas (solo viene a partir del segundo game-rolls)
-        string stateJson = ExtractObject(json, "state");
+    private IEnumerator AnimateMyRollAndUnlock()
+    {
+        _animating = true;
+        OnTurnChanged?.Invoke();
+        yield return BoardManager.Instance?.AnimateMyRoll(MyDice);
+        MyDiceRolled = true;
+        _animating = false;
+        _waitingServer = false;
+        OnRollsChanged?.Invoke();
+        OnTurnChanged?.Invoke();
+
+        Debug.Log($"[Game] Mi animación terminada | MyDiceRolled={MyDiceRolled} | CanClickDice={CanClickDice} | _waitingServer={_waitingServer}");
+    }
+
+    private IEnumerator AnimateEnemyRollAndUnlock(List<DiceData> enemyRolls)
+    {
+        InputBlocked = true;
+        yield return BoardManager.Instance?.AnimateEnemyRoll(enemyRolls);
+        InputBlocked = false;
+
+        Debug.Log($"[Game] Animación rival terminada | InputBlocked={InputBlocked}");
+    }
+
+    /// El servidor avisa de que un jugador acaba de confirmar.
+    /// Body: { user, selected: [...], state: {...} }
+    private void HandleSelectionConfirmed(string body)
+    {
+        string user = ExtractStringValue(body, "user");
+        bool isMe = (user == GameData.MyId);
+
+        // Actualizamos el estado completo
+        string stateJson = ExtractObject(body, "state");
         if (!string.IsNullOrEmpty(stateJson))
         {
             CurrentState = ParseGameState(stateJson);
-            Debug.Log($"[Game] Estado:{CurrentState?.state} | Turno:{CurrentState?.activePlayer} | Ronda:{CurrentState?.round}");
+            Debug.Log($"[Game] Estado tras confirmación: {CurrentState?.state} | Turno: {CurrentState?.activePlayer} | Ronda: {CurrentState?.round}");
 
-            // Reconstruimos las filas confirmadas desde el state del servidor
+            // Reconstruimos las filas confirmadas desde el state
             MyConfirmed = ParseSelectedRolls(stateJson, GameData.MyId);
             EnemyConfirmed = ParseSelectedRolls(stateJson, GameData.OpponentId);
 
             foreach (var d in MyConfirmed) { d.isMyDice = true; d.kept = true; }
             foreach (var d in EnemyConfirmed) { d.isMyDice = false; d.kept = true; }
-
-            Debug.Log($"[Game] Confirmados → Yo:{MyConfirmed.Count} | Rival:{EnemyConfirmed.Count}");
-        }
-        else if (!string.IsNullOrEmpty(activeUser))
-        {
-            // Primer game-rolls: no hay confirmados todavía
-            CurrentState = new GameState
-            {
-                state = "select-rolls",
-                round = 1,
-                activePlayer = activeUser
-            };
-            MyConfirmed.Clear();
-            EnemyConfirmed.Clear();
         }
 
+        // Reseteamos el cuenco propio: la próxima vez que sea mi turno
+        // tendré que pulsar espacio para tirar de nuevo.
+        MyDice.Clear();
+        MyDiceRolled = false;
         _waitingServer = false;
 
-        BoardManager.Instance?.RebuildAll();
+        Debug.Log($"[Game] selection-confirmed por {(isMe ? "YO" : "RIVAL")} | Mis confirmados:{MyConfirmed.Count} | Rival:{EnemyConfirmed.Count}");
+
+        // Animación de los dados moviéndose a la fila correspondiente.
+        // El BoardManager se encarga de que sea visible en ambos clientes.
+        StartCoroutine(AnimateConfirmAndRebuild(isMe));
 
         OnRollsChanged?.Invoke();
         OnTurnChanged?.Invoke();
     }
 
-    private IEnumerator RollMyDiceAnimation()
+    private IEnumerator AnimateConfirmAndRebuild(bool wasMe)
     {
-        _animating = true;
+        InputBlocked = true;
+        yield return BoardManager.Instance?.AnimateConfirmation(wasMe);
+        BoardManager.Instance?.RebuildAll();
+        InputBlocked = false;
         OnTurnChanged?.Invoke();
+    }
 
-        yield return BoardManager.Instance?.AnimateMyRoll(MyDice);
-
-        MyDiceRolled = true;
-        _animating = false;
-
+    /// El servidor avisa del inicio de una nueva ronda tras la resolución.
+    private void HandleRoundStart(string body)
+    {
+        string stateJson = ExtractObject(body, "state");
+        if (!string.IsNullOrEmpty(stateJson))
+        {
+            CurrentState = ParseGameState(stateJson);
+            MyConfirmed = ParseSelectedRolls(stateJson, GameData.MyId);
+            EnemyConfirmed = ParseSelectedRolls(stateJson, GameData.OpponentId);
+        }
+        MyDice.Clear();
+        MyDiceRolled = false;
+        _waitingServer = false;
+        BoardManager.Instance?.RebuildAll();
         OnRollsChanged?.Invoke();
         OnTurnChanged?.Invoke();
     }
@@ -224,7 +296,6 @@ public class GameManager : MonoBehaviour
     {
         if (!CanConfirm) return;
 
-        // Construimos el JSON con los dados marcados como kept
         var sb = new System.Text.StringBuilder();
         bool first = true;
         int keptCount = 0;
@@ -242,7 +313,6 @@ public class GameManager : MonoBehaviour
 
         string body = $"{{\"rolls\":{sb}}}";
         WebSocketManager.Instance.Send("select-rolls", body);
-
         Debug.Log($"[Game] Enviada selección al servidor: {keptCount} dados guardados");
 
         _waitingServer = true;

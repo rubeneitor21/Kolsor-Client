@@ -674,8 +674,11 @@ MonoBehaviour:
   myKeptRowOrigin: {fileID: 1236512083}
   enemyKeptRowOrigin: {fileID: 2114641109}
   keptRowSpacing: 0.55
-  keptConfirmedShift: {x: 0, y: 0, z: 4}
   keptYOffset: 0.4
+  rollDuration: 1
+  rollFaceChangeRate: 0.05
+  confirmAnimDuration: 0.6
+  energyHaloMaterial: {fileID: 2100000, guid: 02b9732136f8e4d45a8575c055b14af0, type: 2}
 --- !u!4 &435860980
 Transform:
   m_ObjectHideFlags: 0
