@@ -12,6 +12,16 @@ public class GameManager : MonoBehaviour
     // Se llena cuando llega dice-rolled dirigido a mí.
     public List<DiceData> MyDice { get; private set; } = new();
 
+    // Dados sobrantes tras confirmar (los que NO guardé).
+    // Se muestran en el cuenco propio mientras es el turno del rival.
+    // Se limpian cuando vuelvo a tirar o empieza nueva ronda.
+    public List<DiceData> MySurvivors { get; private set; } = new();
+
+    // Dados actuales en el cuenco del rival.
+    // Se establece cuando el rival tira, se reduce a los sobrantes cuando confirma.
+    // Se usa en RebuildAll para que el cuenco rival no quede vacío.
+    public List<DiceData> EnemyCurrentBowl { get; private set; } = new();
+
     // Dados confirmados acumulados (la fila lateral).
     // Se reconstruyen desde state.users[id].selectedRolls cuando confirmamos.
     public List<DiceData> MyConfirmed { get; private set; } = new();
@@ -50,6 +60,7 @@ public class GameManager : MonoBehaviour
     public static bool InputBlocked = false;
     private bool _animating = false;
     private bool _waitingServer = false;
+    private DiceController _hoveredDice = null;
 
     void Awake()
     {
@@ -76,6 +87,8 @@ public class GameManager : MonoBehaviour
         };
         MyConfirmed.Clear();
         EnemyConfirmed.Clear();
+        MySurvivors.Clear();
+        EnemyCurrentBowl.Clear();
 
         BoardManager.Instance?.RebuildAll();
     }
@@ -98,22 +111,37 @@ public class GameManager : MonoBehaviour
             }
         }
 
-        // TEST temporal: log de cualquier interacción con el ratón
-        if (Mouse.current == null)
-        {
-            if (Time.frameCount % 300 == 0) Debug.Log("[Game] Mouse.current es NULL");
-        }
-        else
+        if (Mouse.current != null)
         {
             if (Mouse.current.leftButton.wasPressedThisFrame)
             {
-                Debug.Log($"[Game] CLICK izquierdo detectado | CanClickDice={CanClickDice}");
+                Debug.Log($"[Game] CLICK izquierdo | CanClickDice={CanClickDice}");
                 if (CanClickDice) HandleDiceClick();
             }
-            if (Mouse.current.rightButton.wasPressedThisFrame)
+
+            // Hover: resalta el dado bajo el cursor usando raycast.
+            // OnMouseEnter/Exit no son fiables con el New Input System en modo exclusivo.
+            HandleHover();
+        }
+        else
+        {
+            // Sin ratón (táctil / sin dispositivo): limpiar hover si lo había.
+            if (_hoveredDice != null)
             {
-                Debug.Log("[Game] CLICK derecho detectado");
+                _hoveredDice.OnHoverExit();
+                _hoveredDice = null;
             }
+        }
+    }
+
+    private void HandleHover()
+    {
+        var newHover = BoardManager.Instance?.GetHoveredDie(Mouse.current.position.ReadValue());
+        if (newHover != _hoveredDice)
+        {
+            _hoveredDice?.OnHoverExit();
+            newHover?.OnHoverEnter();
+            _hoveredDice = newHover;
         }
     }
 
@@ -191,6 +219,10 @@ public class GameManager : MonoBehaviour
 
         if (isMe)
         {
+            // Al tirar de nuevo, los sobrantes de la tirada anterior ya no son necesarios.
+            // BoardManager reutilizará sus GameObjects como base para la nueva animación.
+            MySurvivors.Clear();
+
             MyDice = rolls;
             foreach (var d in MyDice) { d.isMyDice = true; d.kept = false; }
             Debug.Log($"[Game] Antes de animar mi tirada: MyDiceRolled={MyDiceRolled}");
@@ -198,7 +230,9 @@ public class GameManager : MonoBehaviour
         }
         else
         {
-            // El rival tira. Animamos su cuenco con sus dados reales.
+            // El rival tira. Guardamos sus dados para RebuildAll.
+            EnemyCurrentBowl = rolls;
+            foreach (var d in EnemyCurrentBowl) { d.isMyDice = false; d.kept = false; }
             Debug.Log($"[Game] Antes de animar tirada rival: rolls.Count={rolls.Count}");
             StartCoroutine(AnimateEnemyRollAndUnlock(rolls));
         }
@@ -249,6 +283,32 @@ public class GameManager : MonoBehaviour
             foreach (var d in EnemyConfirmed) { d.isMyDice = false; d.kept = true; }
         }
 
+        // Guardamos los dados sobrantes antes de limpiar.
+        if (isMe)
+        {
+            // Mis sobrantes: los que no guardé en esta tirada.
+            MySurvivors = MyDice.FindAll(d => !d.kept);
+            foreach (var d in MySurvivors) { d.isMyDice = false; d.kept = false; }
+            Debug.Log($"[Game] MySurvivors guardados: {MySurvivors.Count} dados");
+        }
+        else
+        {
+            // Sobrantes del rival: restamos los que guardó de su cuenco actual.
+            // Así sabemos qué dados le quedan visibles en el cuenco rival.
+            string selectedArray = ExtractArray(body, "selected");
+            var selected = string.IsNullOrEmpty(selectedArray)
+                ? new List<DiceData>()
+                : ParseDiceArray(selectedArray);
+            var survivors = new List<DiceData>(EnemyCurrentBowl);
+            foreach (var sel in selected)
+            {
+                var match = survivors.Find(d => d.face == sel.face && d.energy == sel.energy);
+                if (match != null) survivors.Remove(match);
+            }
+            EnemyCurrentBowl = survivors;
+            Debug.Log($"[Game] EnemyCurrentBowl tras confirmación rival: {EnemyCurrentBowl.Count} sobrantes");
+        }
+
         // Reseteamos el cuenco propio: la próxima vez que sea mi turno
         // tendré que pulsar espacio para tirar de nuevo.
         MyDice.Clear();
@@ -285,6 +345,8 @@ public class GameManager : MonoBehaviour
             EnemyConfirmed = ParseSelectedRolls(stateJson, GameData.OpponentId);
         }
         MyDice.Clear();
+        MySurvivors.Clear();
+        EnemyCurrentBowl.Clear();
         MyDiceRolled = false;
         _waitingServer = false;
         BoardManager.Instance?.RebuildAll();

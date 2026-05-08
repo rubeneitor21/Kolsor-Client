@@ -1,10 +1,12 @@
-using UnityEngine;
+ï»¿using UnityEngine;
 
 [RequireComponent(typeof(Collider))]
 public class DiceController : MonoBehaviour
 {
     public DiceData Data { get; private set; }
+
     private Vector3 _restPosition;
+    public Vector3 RestPosition => _restPosition;
 
     public void Init(DiceData data)
     {
@@ -16,7 +18,6 @@ public class DiceController : MonoBehaviour
     {
         _restPosition = pos;
         transform.position = pos;
-
         var rb = GetComponent<Rigidbody>();
         if (rb != null)
         {
@@ -25,33 +26,42 @@ public class DiceController : MonoBehaviour
         }
     }
 
+    /// Marca o desmarca el dado para guardar y pide al tablero que actualice posiciones.
     public void ToggleKeep()
     {
         if (Data == null || !Data.isMyDice) return;
         Data.kept = !Data.kept;
-        ApplyVisual();
+        BoardManager.Instance?.RefreshSelectionRow();
     }
 
+    /// Limpia emision residual y hace snap a la posicion de reposo.
+    /// Llamado desde BoardManager tras la animacion de tirada.
     public void ApplyVisual()
     {
         if (Data == null) return;
         transform.position = _restPosition;
+        SetEmission(Color.black);
+    }
 
-        var renderer = GetComponent<Renderer>();
-        if (renderer == null) return;
+    // Hover (llamado desde GameManager via raycast).
+    // No usamos OnMouseEnter/OnMouseExit: no son fiables con
+    // el New Input System en modo exclusivo.
 
-        var mat = renderer.material;
-        mat.EnableKeyword("_EMISSION");
+    public void OnHoverEnter()
+    {
+        SetEmission(new Color(1f, 0.85f, 0.2f) * 1.5f);
+    }
 
-        if (Data.kept)
-        {
-            // Marcado para guardar: emisión amarilla brillante en el dado.
-            // Como el halo de energy es más tenue y solo está alrededor, se distingue.
-            mat.SetColor("_EmissionColor", new Color(1f, 0.85f, 0.2f) * 1.5f);
-        }
-        else
-        {
-            mat.SetColor("_EmissionColor", Color.black);
-        }
+    public void OnHoverExit()
+    {
+        SetEmission(Color.black);
+    }
+
+    private void SetEmission(Color color)
+    {
+        var rend = GetComponent<Renderer>();
+        if (rend == null) return;
+        rend.material.EnableKeyword("_EMISSION");
+        rend.material.SetColor("_EmissionColor", color);
     }
 }
