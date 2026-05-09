@@ -61,6 +61,7 @@ public class GameManager : MonoBehaviour
     private bool _animating = false;
     private bool _waitingServer = false;
     private DiceController _hoveredDice = null;
+    private int _myRollCount = 0; // tiradas propias en la ronda actual (máx 3)
 
     void Awake()
     {
@@ -200,6 +201,9 @@ public class GameManager : MonoBehaviour
             case "round-start":
                 HandleRoundStart(body);
                 break;
+            case "god-favor":
+                HandleGodFavor(body);
+                break;
         }
     }
 
@@ -225,7 +229,8 @@ public class GameManager : MonoBehaviour
 
             MyDice = rolls;
             foreach (var d in MyDice) { d.isMyDice = true; d.kept = false; }
-            Debug.Log($"[Game] Antes de animar mi tirada: MyDiceRolled={MyDiceRolled}");
+            _myRollCount++;
+            Debug.Log($"[Game] Antes de animar mi tirada: MyDiceRolled={MyDiceRolled} | tirada={_myRollCount}");
             StartCoroutine(AnimateMyRollAndUnlock());
         }
         else
@@ -249,7 +254,18 @@ public class GameManager : MonoBehaviour
         OnRollsChanged?.Invoke();
         OnTurnChanged?.Invoke();
 
-        Debug.Log($"[Game] Mi animación terminada | MyDiceRolled={MyDiceRolled} | CanClickDice={CanClickDice} | _waitingServer={_waitingServer}");
+        Debug.Log($"[Game] Mi animación terminada | MyDiceRolled={MyDiceRolled} | tirada={_myRollCount}");
+
+        // Tirada 3: auto-confirmar todos los dados sin que el jugador pulse espacio.
+        // NO llamamos RefreshSelectionRow: los dados deben ir directamente al confirmed row
+        // (la animación de SpawnConfirmedRow los moverá desde el bowl hasta allí).
+        if (_myRollCount >= 3)
+        {
+            Debug.Log("[Game] Tirada 3 → auto-confirmando todos los dados");
+            foreach (var d in MyDice) d.kept = true;
+            yield return new WaitForSeconds(0.4f); // pausa breve para que el jugador vea sus dados
+            ConfirmSelection();
+        }
     }
 
     private IEnumerator AnimateEnemyRollAndUnlock(List<DiceData> enemyRolls)
@@ -318,8 +334,15 @@ public class GameManager : MonoBehaviour
         Debug.Log($"[Game] selection-confirmed por {(isMe ? "YO" : "RIVAL")} | Mis confirmados:{MyConfirmed.Count} | Rival:{EnemyConfirmed.Count}");
 
         // Animación de los dados moviéndose a la fila correspondiente.
-        // El BoardManager se encarga de que sea visible en ambos clientes.
         StartCoroutine(AnimateConfirmAndRebuild(isMe));
+
+        // Auto-skip: si ahora es mi turno pero ya tengo todos mis dados confirmados,
+        // envío una selección vacía para ceder el turno sin tirar dados.
+        if (IsMyTurn && MyConfirmed.Count >= 6)
+        {
+            Debug.Log("[Game] Auto-skip: ya tengo 6 dados confirmados, cedo el turno");
+            StartCoroutine(AutoSkipTurn());
+        }
 
         OnRollsChanged?.Invoke();
         OnTurnChanged?.Invoke();
@@ -331,6 +354,36 @@ public class GameManager : MonoBehaviour
         yield return BoardManager.Instance?.AnimateConfirmation(wasMe);
         BoardManager.Instance?.RebuildAll();
         InputBlocked = false;
+        OnTurnChanged?.Invoke();
+    }
+
+    /// El servidor envía god-favor cuando la última confirmación cierra la ronda
+    /// (segundo jugador en tirada 3, o totalSelects >= 12).
+    /// En ese caso NO se envía selection-confirmed, así que es este handler el que
+    /// limpia el estado y mueve los dados restantes a la fila confirmada.
+    private void HandleGodFavor(string body)
+    {
+        string stateJson = ExtractObject(body, "state");
+        if (!string.IsNullOrEmpty(stateJson))
+        {
+            CurrentState = ParseGameState(stateJson);
+            MyConfirmed = ParseSelectedRolls(stateJson, GameData.MyId);
+            EnemyConfirmed = ParseSelectedRolls(stateJson, GameData.OpponentId);
+            foreach (var d in MyConfirmed) { d.isMyDice = true; d.kept = true; }
+            foreach (var d in EnemyConfirmed) { d.isMyDice = false; d.kept = true; }
+        }
+
+        // Los dados que quedan en cuenco/selección se mueven a la fila confirmada.
+        MySurvivors.Clear();
+        MyDice.Clear();
+        EnemyCurrentBowl.Clear(); // evita que RebuildAll muestre dados en el bowl del rival
+        MyDiceRolled = false;
+        _waitingServer = false;
+
+        Debug.Log($"[Game] god-favor | MyConfirmed:{MyConfirmed.Count} | EnemyConfirmed:{EnemyConfirmed.Count}");
+
+        StartCoroutine(AnimateConfirmAndRebuild(wasMe: true));
+        OnRollsChanged?.Invoke();
         OnTurnChanged?.Invoke();
     }
 
@@ -349,8 +402,19 @@ public class GameManager : MonoBehaviour
         EnemyCurrentBowl.Clear();
         MyDiceRolled = false;
         _waitingServer = false;
+        _myRollCount = 0;
         BoardManager.Instance?.RebuildAll();
         OnRollsChanged?.Invoke();
+        OnTurnChanged?.Invoke();
+    }
+
+    private IEnumerator AutoSkipTurn()
+    {
+        // Pequeña pausa para que AnimateConfirmAndRebuild empiece antes de enviar el skip.
+        yield return new WaitForSeconds(0.4f);
+        Debug.Log("[Game] AutoSkipTurn → enviando select-rolls vacío");
+        WebSocketManager.Instance.Send("select-rolls", "{\"rolls\":[]}");
+        _waitingServer = true;
         OnTurnChanged?.Invoke();
     }
 

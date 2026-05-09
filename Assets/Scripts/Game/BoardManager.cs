@@ -33,7 +33,7 @@ public class BoardManager : MonoBehaviour
     public float rollFaceChangeRate = 0.05f;
 
     [Header("Animación de confirmación")]
-    public float confirmAnimDuration = 0.6f;
+    public float confirmAnimDuration = 0f; // la animación real la hace SpawnConfirmedRow+MoveObject
 
     [Header("Material del halo dorado")]
     public Material energyHaloMaterial;
@@ -94,17 +94,26 @@ public class BoardManager : MonoBehaviour
         int prevMyConfirmed = _myConfirmedObjects.Count;
         int prevEnemyConfirmed = _enemyConfirmedObjects.Count;
 
-        // Posiciones del preview row para mis nuevos dados confirmados
+        // Snapshot de posiciones reales antes de destruir los objetos.
+        // Usamos _selectionOrder para saber qué bowl-objects están en el preview row:
+        //   - Si el dado fue seleccionado manualmente → está en el preview row (Z: -2)
+        //   - Si fue auto-confirmado en tirada 3   → sigue en el bowl
+        // De esta forma los dados siempre animan desde donde están físicamente.
+        var selectionOrderSnapshot = new List<int>(_selectionOrder);
+        var myBowlPositions = _myBowlObjects
+            .Select(o => o != null ? o.transform.position : Vector3.zero)
+            .ToList();
+
+        int newMyCount = (gm.MyConfirmed?.Count ?? 0) - prevMyConfirmed;
         var myNewStarts = new List<Vector3>();
-        if (myKeptRowOrigin != null)
+        for (int i = 0; i < newMyCount; i++)
         {
-            var op = myKeptRowOrigin.position;
-            int newCount = (gm.MyConfirmed?.Count ?? 0) - prevMyConfirmed;
-            for (int i = 0; i < newCount; i++)
-                myNewStarts.Add(new Vector3(op.x, 0.5f, op.z - i * keptRowSpacing));
+            // Si tenemos orden de selección, el slot i-ésimo corresponde al dado en _selectionOrder[i]
+            int bowlIdx = i < selectionOrderSnapshot.Count ? selectionOrderSnapshot[i] : i;
+            myNewStarts.Add(bowlIdx < myBowlPositions.Count ? myBowlPositions[bowlIdx] : Vector3.zero);
         }
 
-        // Posiciones del bowl del rival para sus nuevos dados confirmados
+        // Dados del rival: sus posiciones actuales en el bowl
         var enemyNewStarts = _enemyBowlObjects
             .Where(o => o != null)
             .Select(o => o.transform.position)
