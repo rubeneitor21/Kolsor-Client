@@ -35,6 +35,18 @@ public class BoardManager : MonoBehaviour
     [Header("Animación de confirmación")]
     public float confirmAnimDuration = 0f; // la animación real la hace SpawnConfirmedRow+MoveObject
 
+    [Header("Figuras de dioses (8 prefabs: 0-3 daño, 4-7 protección)")]
+    public GameObject[] godPrefabs;          // asignar en Inspector en orden
+    public Transform myGodOrigin;
+    public Transform enemyGodOrigin;
+    public float godSpacing = 0.8f;
+
+    [Header("Fichas de energía")]
+    public GameObject tokenPrefab;
+    public Transform myTokenOrigin;
+    public Transform enemyTokenOrigin;
+    public float tokenSpacing = 0.32f;
+
     [Header("Material del halo dorado")]
     public Material energyHaloMaterial;
 
@@ -44,6 +56,11 @@ public class BoardManager : MonoBehaviour
     private List<GameObject> _enemyBowlObjects = new();
     private List<GameObject> _myConfirmedObjects = new();
     private List<GameObject> _enemyConfirmedObjects = new();
+    private List<GameObject> _myGodObjects = new();
+    private List<GameObject> _enemyGodObjects = new();
+    private List<GameObject> _myTokenObjects = new();
+    private List<GameObject> _enemyTokenObjects = new();
+
     // Orden de seleccion: indices de _myBowlObjects en el orden en que el jugador los selecciono.
     private List<int> _selectionOrder = new();
     // Coroutines activas de movimiento por objeto, para cancelarlas antes de iniciar una nueva.
@@ -492,6 +509,199 @@ public class BoardManager : MonoBehaviour
         if (obj != null) obj.transform.position = target;
     }
 
+    // ── Dioses y fichas ──────────────────────────────────────
+
+    /// Instancia las 2 figuras de dios de cada jugador usando la semilla del RoomId.
+    /// Índices 0-3 del array = dioses de daño; 4-7 = dioses de protección.
+    public void SpawnGodFigures()
+    {
+        ClearGodsAndTokens();
+        if (godPrefabs == null || godPrefabs.Length < 8) return;
+        if (myGodOrigin == null || enemyGodOrigin == null) return;
+
+        // Mezcla determinista de los 8 dioses con la semilla de la sala
+        int seed = string.IsNullOrEmpty(GameData.RoomId) ? 0 : GameData.RoomId.GetHashCode();
+        var rng = new System.Random(seed);
+        var idx = new int[] { 0, 1, 2, 3, 4, 5, 6, 7 };
+        for (int i = 7; i > 0; i--)
+        {
+            int j = rng.Next(i + 1);
+            (idx[i], idx[j]) = (idx[j], idx[i]);
+        }
+
+        // PlayerStart: idx[0] (daño), idx[4] (protección)
+        // PlayerSecond: idx[1] (daño), idx[5] (protección)
+        bool iAmStart = GameData.MyId == GameData.PlayerStartId;
+        int myDmg = iAmStart ? idx[0] : idx[1];
+        int myProt = iAmStart ? idx[4] : idx[5];
+        int enDmg = iAmStart ? idx[1] : idx[0];
+        int enProt = iAmStart ? idx[5] : idx[4];
+
+        SpawnGodFigure(myDmg, "damage", myGodOrigin, _myGodObjects, isInteractable: true);
+        SpawnGodFigure(myProt, "protection", myGodOrigin, _myGodObjects, isInteractable: true);
+        SpawnGodFigure(enDmg, "damage", enemyGodOrigin, _enemyGodObjects, isInteractable: false);
+        SpawnGodFigure(enProt, "protection", enemyGodOrigin, _enemyGodObjects, isInteractable: false);
+    }
+
+    private void SpawnGodFigure(int prefabIdx, string favorType, Transform origin,
+                                 List<GameObject> list, bool isInteractable)
+    {
+        if (prefabIdx < 0 || prefabIdx >= godPrefabs.Length || godPrefabs[prefabIdx] == null) return;
+        int slot = list.Count; // 0 = daño (izquierda), 1 = protección (derecha)
+        Vector3 pos = origin.position + new Vector3(0f, 0f, -1f) * slot * godSpacing;
+        var obj = Instantiate(godPrefabs[prefabIdx], pos, origin.rotation);
+
+        // Añadimos BoxCollider para detección de clicks
+        if (obj.GetComponent<Collider>() == null)
+            obj.AddComponent<BoxCollider>();
+
+        var ctrl = obj.AddComponent<GodFavorController>();
+        ctrl.FavorType = favorType;
+        ctrl.IsInteractable = isInteractable;
+        list.Add(obj);
+    }
+
+    /// Instancia las fichas doradas de energía de cada jugador.
+    public void SpawnTokens(int myCount, int enemyCount)
+    {
+        if (tokenPrefab == null) return;
+        foreach (var o in _myTokenObjects) if (o) Destroy(o);
+        foreach (var o in _enemyTokenObjects) if (o) Destroy(o);
+        _myTokenObjects.Clear();
+        _enemyTokenObjects.Clear();
+
+        if (myTokenOrigin != null)
+            for (int i = 0; i < myCount; i++)
+            {
+                Vector3 pos = myTokenOrigin.position + new Vector3(0f, 0f, -1f) * i * tokenSpacing;
+                _myTokenObjects.Add(Instantiate(tokenPrefab, pos, Quaternion.identity));
+            }
+
+        if (enemyTokenOrigin != null)
+            for (int i = 0; i < enemyCount; i++)
+            {
+                Vector3 pos = enemyTokenOrigin.position + new Vector3(0f, 0f, -1f) * i * tokenSpacing;
+                _enemyTokenObjects.Add(Instantiate(tokenPrefab, pos, Quaternion.identity));
+            }
+    }
+
+    private void ClearGodsAndTokens()
+    {
+        foreach (var o in _myGodObjects) if (o) Destroy(o);
+        foreach (var o in _enemyGodObjects) if (o) Destroy(o);
+        foreach (var o in _myTokenObjects) if (o) Destroy(o);
+        foreach (var o in _enemyTokenObjects) if (o) Destroy(o);
+        _myGodObjects.Clear();
+        _enemyGodObjects.Clear();
+        _myTokenObjects.Clear();
+        _enemyTokenObjects.Clear();
+    }
+
+    /// Devuelve el GodFavorController bajo el cursor (solo los interactuables del jugador local).
+    public GodFavorController GetHoveredGod(Vector2 screenPos)
+    {
+        var cam = Camera.main;
+        if (cam == null) return null;
+        Ray ray = cam.ScreenPointToRay(screenPos);
+        var hits = Physics.RaycastAll(ray, 100f);
+        foreach (var hit in hits)
+        {
+            var ctrl = hit.collider.GetComponent<GodFavorController>();
+            if (ctrl != null && ctrl.IsInteractable) return ctrl;
+        }
+        return null;
+    }
+
+    // ── Resolución visual ─────────────────────────────────────
+    // Layout por zonas a lo largo del eje Z:
+    //   Zona 1: My Axe    <-->  Enemy Helmet  (misma Z, X distinto)
+    //   Zona 2: My Arrow  <-->  Enemy Shield
+    //   Zona 3: Hand (ambos)
+    //   Zona 4: Enemy Axe <-->  My Helmet
+    //   Zona 5: Enemy Arrow <-> My Shield
+    // Si un lado del matchup no tiene dado, el slot queda vacío.
+
+    public IEnumerator AnimateResolution()
+    {
+        var gm = GameManager.Instance;
+        if (gm == null) yield break;
+
+        float myX = myKeptRowOrigin != null ? myKeptRowOrigin.position.x : -0.5f;
+        float enemyX = enemyKeptRowOrigin != null ? enemyKeptRowOrigin.position.x : 0.5f;
+        float y = (myKeptRowOrigin?.position.y ?? 0f) + keptYOffset;
+        float startZ = confirmedRowZ;
+        const float zoneGap = 0.3f;
+
+        // Índices de cada tipo para mis dados y los del rival
+        var myIdx = GetIndicesByType(gm.MyConfirmed);
+        var enIdx = GetIndicesByType(gm.EnemyConfirmed);
+
+        var myMoves = new Dictionary<int, Vector3>();
+        var enemyMoves = new Dictionary<int, Vector3>();
+        float zOff = 0f;
+
+        void PlaceZone(List<int> left, List<int> right, bool leftIsMine)
+        {
+            int slots = Mathf.Max(left.Count, right.Count);
+            if (slots == 0) return;
+            for (int i = 0; i < slots; i++)
+            {
+                float z = startZ - zOff;
+                if (i < left.Count)
+                {
+                    var pos = new Vector3(leftIsMine ? myX : enemyX, y, z);
+                    if (leftIsMine) myMoves[left[i]] = pos;
+                    else enemyMoves[left[i]] = pos;
+                }
+                if (i < right.Count)
+                {
+                    var pos = new Vector3(leftIsMine ? enemyX : myX, y, z);
+                    if (leftIsMine) enemyMoves[right[i]] = pos;
+                    else myMoves[right[i]] = pos;
+                }
+                zOff += keptRowSpacing;
+            }
+            zOff += zoneGap;
+        }
+
+        // Zona 1: My Axe  vs Enemy Helmet
+        PlaceZone(myIdx[DiceFace.Axe], enIdx[DiceFace.Helmet], leftIsMine: true);
+        // Zona 2: My Arrow vs Enemy Shield
+        PlaceZone(myIdx[DiceFace.Arrow], enIdx[DiceFace.Shield], leftIsMine: true);
+        // Zona 3: Hand (ambos, lado a lado)
+        PlaceZone(myIdx[DiceFace.Hand], enIdx[DiceFace.Hand], leftIsMine: true);
+        // Zona 4: Enemy Axe vs My Helmet
+        PlaceZone(enIdx[DiceFace.Axe], myIdx[DiceFace.Helmet], leftIsMine: false);
+        // Zona 5: Enemy Arrow vs My Shield
+        PlaceZone(enIdx[DiceFace.Arrow], myIdx[DiceFace.Shield], leftIsMine: false);
+
+        // Aplicar movimientos
+        foreach (var kv in myMoves)
+            if (kv.Key < _myConfirmedObjects.Count && _myConfirmedObjects[kv.Key] != null)
+                MoveObject(_myConfirmedObjects[kv.Key], kv.Value);
+        foreach (var kv in enemyMoves)
+            if (kv.Key < _enemyConfirmedObjects.Count && _enemyConfirmedObjects[kv.Key] != null)
+                MoveObject(_enemyConfirmedObjects[kv.Key], kv.Value);
+
+        yield return new WaitForSeconds(0.4f);
+    }
+
+    private static Dictionary<DiceFace, List<int>> GetIndicesByType(List<DiceData> dice)
+    {
+        var result = new Dictionary<DiceFace, List<int>>
+        {
+            { DiceFace.Axe,    new List<int>() },
+            { DiceFace.Arrow,  new List<int>() },
+            { DiceFace.Hand,   new List<int>() },
+            { DiceFace.Shield, new List<int>() },
+            { DiceFace.Helmet, new List<int>() },
+        };
+        if (dice == null) return result;
+        for (int i = 0; i < dice.Count; i++)
+            if (result.ContainsKey(dice[i].face)) result[dice[i].face].Add(i);
+        return result;
+    }
+
     // ── Helpers ──────────────────────────────────────────────
 
     private List<DiceData> GenerateFaces(System.Random rng, int count)
@@ -619,6 +829,7 @@ public class BoardManager : MonoBehaviour
         _enemyConfirmedObjects.Clear();
         _selectionOrder.Clear();
         _moveCoroutines.Clear(); // los objetos se destruyen, las coroutines mueren con ellos
+        ClearGodsAndTokens();
     }
 
     public void SpawnStones(int playerCount = 15, int opponentCount = 15)

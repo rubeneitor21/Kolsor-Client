@@ -29,6 +29,10 @@ public class GameManager : MonoBehaviour
 
     // Estado del juego
     public GameState CurrentState { get; private set; }
+    public int MyLife { get; private set; } = 15;
+    public int OpponentLife { get; private set; } = 15;
+    public int MyEnergy { get; private set; } = 0;
+    public int OpponentEnergy { get; private set; } = 0;
     public bool IsMyTurn => CurrentState?.activePlayer == GameData.MyId;
     public string OpponentName => GameData.OpponentName;
 
@@ -56,12 +60,16 @@ public class GameManager : MonoBehaviour
 
     public static event Action OnRollsChanged;
     public static event Action OnTurnChanged;
+    public static event Action OnGodFavorNeeded;   // muestra el panel de elección
+    public static event Action OnLifeUpdated;       // actualiza vidas/energía en la UI
 
     public static bool InputBlocked = false;
     private bool _animating = false;
     private bool _waitingServer = false;
     private DiceController _hoveredDice = null;
-    private int _myRollCount = 0; // tiradas propias en la ronda actual (máx 3)
+    private int _myRollCount = 0;      // tiradas propias en la ronda actual (máx 3)
+    private bool _godFavorSelected = false; // ya elegí favor divino esta fase
+    private GodFavorController _hoveredGod = null;
 
     void Awake()
     {
@@ -116,34 +124,58 @@ public class GameManager : MonoBehaviour
         {
             if (Mouse.current.leftButton.wasPressedThisFrame)
             {
-                Debug.Log($"[Game] CLICK izquierdo | CanClickDice={CanClickDice}");
-                if (CanClickDice) HandleDiceClick();
+                if (CurrentState?.state == "god-favor" && !_godFavorSelected)
+                    HandleGodClick();
+                else
+                {
+                    Debug.Log($"[Game] CLICK izquierdo | CanClickDice={CanClickDice}");
+                    if (CanClickDice) HandleDiceClick();
+                }
             }
-
-            // Hover: resalta el dado bajo el cursor usando raycast.
-            // OnMouseEnter/Exit no son fiables con el New Input System en modo exclusivo.
             HandleHover();
         }
         else
         {
-            // Sin ratón (táctil / sin dispositivo): limpiar hover si lo había.
-            if (_hoveredDice != null)
-            {
-                _hoveredDice.OnHoverExit();
-                _hoveredDice = null;
-            }
+            _hoveredDice?.OnHoverExit(); _hoveredDice = null;
+            _hoveredGod?.OnHoverExit(); _hoveredGod = null;
         }
     }
 
     private void HandleHover()
     {
-        var newHover = BoardManager.Instance?.GetHoveredDie(Mouse.current.position.ReadValue());
-        if (newHover != _hoveredDice)
+        var mousePos = Mouse.current.position.ReadValue();
+
+        // Hover sobre dados
+        var newDice = BoardManager.Instance?.GetHoveredDie(mousePos);
+        if (newDice != _hoveredDice)
         {
             _hoveredDice?.OnHoverExit();
-            newHover?.OnHoverEnter();
-            _hoveredDice = newHover;
+            newDice?.OnHoverEnter();
+            _hoveredDice = newDice;
         }
+
+        // Hover sobre figuras de dios (solo en fase god-favor)
+        GodFavorController newGod = null;
+        if (CurrentState?.state == "god-favor" && !_godFavorSelected)
+            newGod = BoardManager.Instance?.GetHoveredGod(mousePos);
+        if (newGod != _hoveredGod)
+        {
+            _hoveredGod?.OnHoverExit();
+            newGod?.OnHoverEnter();
+            _hoveredGod = newGod;
+        }
+    }
+
+    private void HandleGodClick()
+    {
+        var ctrl = BoardManager.Instance?.GetHoveredGod(Mouse.current.position.ReadValue());
+        if (ctrl == null || !ctrl.IsInteractable) return;
+        ctrl.Select();
+        _godFavorSelected = true;
+        _hoveredGod = null;
+        Debug.Log($"[Game] God click → favor: {ctrl.FavorType}");
+        SendGodFavor(ctrl.FavorType);
+        OnTurnChanged?.Invoke();
     }
 
     private void HandleDiceClick()
@@ -203,6 +235,13 @@ public class GameManager : MonoBehaviour
                 break;
             case "god-favor":
                 HandleGodFavor(body);
+                break;
+            case "resolution-attack-first":
+            case "resolution-attack-second":
+                HandleResolution(body);
+                break;
+            case "game-over":
+                HandleGameOver(body);
                 break;
         }
     }
@@ -380,10 +419,57 @@ public class GameManager : MonoBehaviour
         MyDiceRolled = false;
         _waitingServer = false;
 
-        Debug.Log($"[Game] god-favor | MyConfirmed:{MyConfirmed.Count} | EnemyConfirmed:{EnemyConfirmed.Count}");
+        // Parse life/energy from god-favor state
+        if (!string.IsNullOrEmpty(stateJson))
+        {
+            MyLife = ParseIntField(stateJson, GameData.MyId, "life");
+            OpponentLife = ParseIntField(stateJson, GameData.OpponentId, "life");
+            MyEnergy = ParseIntField(stateJson, GameData.MyId, "energy");
+            OpponentEnergy = ParseIntField(stateJson, GameData.OpponentId, "energy");
+        }
+        Debug.Log($"[Game] god-favor | MyConfirmed:{MyConfirmed.Count} | EnemyConfirmed:{EnemyConfirmed.Count} | MyEnergy:{MyEnergy}");
 
-        StartCoroutine(AnimateConfirmAndRebuild(wasMe: true));
+        _godFavorSelected = false;
+        StartCoroutine(AnimateGodFavorSequence());
+        OnLifeUpdated?.Invoke();
         OnRollsChanged?.Invoke();
+        OnTurnChanged?.Invoke();
+    }
+
+    private IEnumerator AnimateGodFavorSequence()
+    {
+        yield return AnimateConfirmAndRebuild(wasMe: true);
+        // Spawn tokens (energía acumulada) y figuras de dioses
+        BoardManager.Instance?.SpawnTokens(MyEnergy, OpponentEnergy);
+        BoardManager.Instance?.SpawnGodFigures();
+        // Avisar a la UI para que muestre el panel de elección
+        OnGodFavorNeeded?.Invoke();
+    }
+
+    private void HandleResolution(string body)
+    {
+        string stateJson = ExtractObject(body, "state");
+        if (!string.IsNullOrEmpty(stateJson))
+        {
+            MyLife = ParseIntField(stateJson, GameData.MyId, "life");
+            OpponentLife = ParseIntField(stateJson, GameData.OpponentId, "life");
+            MyEnergy = ParseIntField(stateJson, GameData.MyId, "energy");
+            OpponentEnergy = ParseIntField(stateJson, GameData.OpponentId, "energy");
+        }
+        Debug.Log($"[Game] Resolution | MyLife:{MyLife} OpponentLife:{OpponentLife} MyEnergy:{MyEnergy}");
+        var board = BoardManager.Instance;
+        if (board != null) StartCoroutine(board.AnimateResolution());
+        OnLifeUpdated?.Invoke();
+    }
+
+    private void HandleGameOver(string body)
+    {
+        string winner = ExtractStringValue(body, "winner");
+        bool iWon = (winner == GameData.MyId);
+        Debug.Log($"[Game] game-over | winner:{winner} | iWon:{iWon}");
+        GameData.WinnerId = winner;
+        // La UI reacciona a OnTurnChanged para mostrar el panel de game-over
+        CurrentState = new GameState { state = "game-over", round = 0, activePlayer = "" };
         OnTurnChanged?.Invoke();
     }
 
@@ -403,10 +489,24 @@ public class GameManager : MonoBehaviour
         MyDiceRolled = false;
         _waitingServer = false;
         _myRollCount = 0;
+        _godFavorSelected = false;
         BoardManager.Instance?.RebuildAll();
         OnRollsChanged?.Invoke();
         OnTurnChanged?.Invoke();
     }
+
+    /// El jugador invoca un dios de los suyos, o "" para pasar.
+    public void SendGodFavor(string godName)
+    {
+        Debug.Log($"[Game] SendGodFavor: {godName}");
+        WebSocketManager.Instance.Send("select-favor", "{\"godName\":\"" + godName + "\"}");
+    }
+
+    /// Los dioses que eligió este jugador antes de la partida.
+    public string[] MySelectedGods => GameData.MySelectedGods;
+
+    /// Los dioses que eligió el rival.
+    public string[] OpponentSelectedGods => GameData.OpponentSelectedGods;
 
     private IEnumerator AutoSkipTurn()
     {
@@ -520,6 +620,31 @@ public class GameManager : MonoBehaviour
             int.TryParse(stateJson.Substring(rStart, rEnd - rStart), out s.round);
         }
         return s;
+    }
+
+    /// Extrae un int de users[userId][field] dentro del JSON de estado.
+    private int ParseIntField(string stateJson, string userId, string field)
+    {
+        if (string.IsNullOrEmpty(userId)) return 0;
+        string userMarker = "\"" + userId + "\":{";
+        int uStart = stateJson.IndexOf(userMarker);
+        if (uStart == -1) return 0;
+        int depth = 0, i = uStart + userMarker.Length - 1;
+        int uEnd = i;
+        while (i < stateJson.Length)
+        {
+            if (stateJson[i] == '{') depth++;
+            else if (stateJson[i] == '}') { depth--; if (depth == 0) { uEnd = i; break; } }
+            i++;
+        }
+        string userObj = stateJson.Substring(uStart + userMarker.Length - 1, uEnd - (uStart + userMarker.Length - 1) + 1);
+        string marker = "\"" + field + "\":";
+        int fStart = userObj.IndexOf(marker);
+        if (fStart == -1) return 0;
+        fStart += marker.Length;
+        int fEnd = fStart;
+        while (fEnd < userObj.Length && (char.IsDigit(userObj[fEnd]) || userObj[fEnd] == '-')) fEnd++;
+        return int.TryParse(userObj.Substring(fStart, fEnd - fStart), out int val) ? val : 0;
     }
 
     private string ExtractArray(string json, string key)

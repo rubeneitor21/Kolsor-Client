@@ -1,6 +1,6 @@
-﻿using UnityEngine;
+﻿using TMPro;
+using UnityEngine;
 using UnityEngine.UI;
-using TMPro;
 using UnityEngine.SceneManagement;
 
 public class LobbyUI : MonoBehaviour
@@ -18,27 +18,28 @@ public class LobbyUI : MonoBehaviour
     public Button cancelButton;
     public Button exitButton2;
 
+    [Header("Panel: selección de dioses")]
+    public GameObject godSelectionPanel; // contiene GodSelectionUI
+    public GodSelectionUI godSelectionUI;  // ref directa para llamar Show()
+
     void Start()
     {
-        // Mostrar nombre del jugador
         usernameLabel.text = AuthManager.Instance.Username.ToUpper();
 
-        // Estado inicial
         findMatchPanel.SetActive(true);
         matchmakingPanel.SetActive(false);
+        if (godSelectionPanel != null) godSelectionPanel.SetActive(false);
         errorText.text = "";
 
-        // Botones
         findMatchButton.onClick.AddListener(OnFindMatchClick);
         cancelButton.onClick.AddListener(OnCancelClick);
         exitButton.onClick.AddListener(OnExitClick);
         exitButton2.onClick.AddListener(OnExitClick);
 
-        // Eventos de red
         LobbyManager.OnSearchStarted += OnSearchStarted;
         LobbyManager.OnMatchmakingJoin += OnMatchmakingJoin;
+        LobbyManager.OnGodSelectionStart += OnGodSelectionStart;
         LobbyManager.OnGameStart += OnGameStart;
-
         WebSocketManager.OnDisconnected += OnDisconnected;
     }
 
@@ -46,11 +47,13 @@ public class LobbyUI : MonoBehaviour
     {
         LobbyManager.OnSearchStarted -= OnSearchStarted;
         LobbyManager.OnMatchmakingJoin -= OnMatchmakingJoin;
+        LobbyManager.OnGodSelectionStart -= OnGodSelectionStart;
         LobbyManager.OnGameStart -= OnGameStart;
         WebSocketManager.OnDisconnected -= OnDisconnected;
     }
 
-    // ── Botones ────────────────────────────────────────────
+    // ── Botones ───────────────────────────────────────────────────────────────
+
     private void OnFindMatchClick()
     {
         errorText.text = "";
@@ -60,7 +63,6 @@ public class LobbyUI : MonoBehaviour
 
     private void OnCancelClick()
     {
-        // El servidor no tiene cancel por ahora — volvemos al panel de inicio
         matchmakingPanel.SetActive(false);
         findMatchPanel.SetActive(true);
         findMatchButton.interactable = true;
@@ -72,7 +74,8 @@ public class LobbyUI : MonoBehaviour
         SceneManager.LoadScene("LoginScene");
     }
 
-    // ── Eventos de red ─────────────────────────────────────
+    // ── Eventos de red ────────────────────────────────────────────────────────
+
     private void OnSearchStarted()
     {
         findMatchPanel.SetActive(false);
@@ -85,6 +88,15 @@ public class LobbyUI : MonoBehaviour
         statusText.text = message;
     }
 
+    /// Se encontró rival: ocultar "buscando" y mostrar selección de dioses.
+    private void OnGodSelectionStart(string[] gods)
+    {
+        matchmakingPanel.SetActive(false);
+        if (godSelectionPanel != null) godSelectionPanel.SetActive(true);
+        godSelectionUI?.Show(gods); // llamada directa, sin depender de eventos
+    }
+
+    /// Ambos jugadores eligieron dioses: ir al juego.
     private void OnGameStart(GameStartData data)
     {
         SceneManager.LoadScene("GameScene");
@@ -92,6 +104,7 @@ public class LobbyUI : MonoBehaviour
 
     private void OnDisconnected()
     {
+        if (godSelectionPanel != null) godSelectionPanel.SetActive(false);
         matchmakingPanel.SetActive(false);
         findMatchPanel.SetActive(true);
         findMatchButton.interactable = true;
