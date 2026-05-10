@@ -719,9 +719,15 @@ MonoBehaviour:
   - {fileID: 919132149155446097, guid: bbf20874e6e9e5b43b4ef4a786400786, type: 3}
   - {fileID: 919132149155446097, guid: 03417a569fda6fa4fbee715ec25bf7b0, type: 3}
   - {fileID: 919132149155446097, guid: f1ffd8b276be11a498f980cbaeb0f4b5, type: 3}
-  myGodOrigin: {fileID: 754637218}
-  enemyGodOrigin: {fileID: 267783215}
-  godSpacing: 0.8
+  godFigureScale: 1
+  myGodPositions:
+  - {x: -2, y: 0.15, z: -2}
+  - {x: -2, y: 0.15, z: -3}
+  myGodRotation: {x: -90, y: 0, z: -90}
+  enemyGodPositions:
+  - {x: 2, y: 0.15, z: 2}
+  - {x: 2, y: 0.15, z: 3}
+  enemyGodRotation: {x: -90, y: 0, z: 90}
   tokenPrefab: {fileID: 919132149155446097, guid: 7b7b6b6c5328e3043a4ea7db0ae075fa, type: 3}
   myTokenOrigin: {fileID: 1062936662}
   enemyTokenOrigin: {fileID: 715582439}

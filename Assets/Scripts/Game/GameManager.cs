@@ -100,6 +100,7 @@ public class GameManager : MonoBehaviour
         EnemyCurrentBowl.Clear();
 
         BoardManager.Instance?.RebuildAll();
+        BoardManager.Instance?.SpawnGodFigures();
     }
 
     void Update()
@@ -117,6 +118,13 @@ public class GameManager : MonoBehaviour
             {
                 Debug.Log("[Game] SPACE → Confirmar selección");
                 ConfirmSelection();
+            }
+            else if (CurrentState?.state == "god-favor" && !_godFavorSelected)
+            {
+                Debug.Log("[Game] SPACE → pasar favor divino");
+                _godFavorSelected = true;
+                BoardManager.Instance?.DisableGodFavorInteraction();
+                SendGodFavor("");
             }
         }
 
@@ -173,8 +181,9 @@ public class GameManager : MonoBehaviour
         ctrl.Select();
         _godFavorSelected = true;
         _hoveredGod = null;
-        Debug.Log($"[Game] God click → favor: {ctrl.FavorType}");
-        SendGodFavor(ctrl.FavorType);
+        BoardManager.Instance?.DisableGodFavorInteraction();
+        Debug.Log($"[Game] God click → {ctrl.GodName}");
+        SendGodFavor(ctrl.GodName);
         OnTurnChanged?.Invoke();
     }
 
@@ -441,8 +450,7 @@ public class GameManager : MonoBehaviour
         yield return AnimateConfirmAndRebuild(wasMe: true);
         // Spawn tokens (energía acumulada) y figuras de dioses
         BoardManager.Instance?.SpawnTokens(MyEnergy, OpponentEnergy);
-        BoardManager.Instance?.SpawnGodFigures();
-        // Avisar a la UI para que muestre el panel de elección
+        BoardManager.Instance?.EnableGodFavorInteraction();
         OnGodFavorNeeded?.Invoke();
     }
 

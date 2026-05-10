@@ -1,34 +1,36 @@
 ﻿using UnityEngine;
 
-/// Componente que se añade dinámicamente a cada figura de dios en la mesa.
-/// Gestiona el hover, la selección y el envío del favor divino al servidor.
+/// Componente añadido a cada figura de dios en la mesa.
+/// Gestiona hover, selección e invocación.
 [RequireComponent(typeof(Collider))]
 public class GodFavorController : MonoBehaviour
 {
-    /// "damage" o "protection"
-    public string FavorType;
+    /// Nombre del dios: "ThorsStrike", "BrunhildsFury", etc.
+    public string GodName;
 
     /// Solo true para las figuras del jugador local durante la fase god-favor.
     public bool IsInteractable;
 
     private static readonly Color HoverColor = new Color(1f, 0.85f, 0.2f) * 1.5f;
     private static readonly Color SelectedColor = new Color(1f, 0.65f, 0f) * 2f;
+    private static readonly Color PassiveColor = new Color(0.4f, 0.3f, 0.05f) * 0.8f;
 
     private bool _selected;
 
-    // ── Hover (llamado desde GameManager via raycast) ────────
+    void Start()
+    {
+        if (!IsInteractable) SetEmission(PassiveColor);
+    }
 
     public void OnHoverEnter()
     {
-        if (!_selected) SetEmission(HoverColor);
+        if (IsInteractable && !_selected) SetEmission(HoverColor);
     }
 
     public void OnHoverExit()
     {
-        if (!_selected) SetEmission(Color.black);
+        if (!_selected) SetEmission(IsInteractable ? Color.black : PassiveColor);
     }
-
-    // ── Selección ────────────────────────────────────────────
 
     public void Select()
     {
@@ -39,10 +41,15 @@ public class GodFavorController : MonoBehaviour
     public void Deselect()
     {
         _selected = false;
-        SetEmission(Color.black);
+        SetEmission(IsInteractable ? Color.black : PassiveColor);
     }
 
-    // ── Helper ───────────────────────────────────────────────
+    public void SetPassed()
+    {
+        IsInteractable = false;
+        _selected = false;
+        SetEmission(PassiveColor);
+    }
 
     private void SetEmission(Color color)
     {

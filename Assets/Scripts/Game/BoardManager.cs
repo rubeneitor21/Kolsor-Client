@@ -35,17 +35,23 @@ public class BoardManager : MonoBehaviour
     [Header("Animación de confirmación")]
     public float confirmAnimDuration = 0f; // la animación real la hace SpawnConfirmedRow+MoveObject
 
-    [Header("Figuras de dioses (8 prefabs: 0-3 daño, 4-7 protección)")]
-    public GameObject[] godPrefabs;          // asignar en Inspector en orden
-    public Transform myGodOrigin;
-    public Transform enemyGodOrigin;
-    public float godSpacing = 0.8f;
+    [Header("Figuras de dioses")]
+    // Orden: [0]BrunhildsFury [1]SkadisHunt [2]ThorsStrike [3]LokisTrick
+    //        [4]BragisVerve  [5]IdunsRejuvenat [6]MimirsWisdom [7]VarsBond
+    public GameObject[] godPrefabs;
+    public float godFigureScale = 1f;
+
+    public Vector3[] myGodPositions = { new Vector3(-2f, 0.15f, -2f), new Vector3(-2f, 0.15f, -3f) };
+    public Vector3 myGodRotation = new Vector3(-90f, -90f, 0f);
+    public Vector3[] enemyGodPositions = { new Vector3(2f, 0.15f, 2f), new Vector3(2f, 0.15f, 3f) };
+    public Vector3 enemyGodRotation = new Vector3(-90f, 90f, 0f);
 
     [Header("Fichas de energía")]
     public GameObject tokenPrefab;
     public Transform myTokenOrigin;
     public Transform enemyTokenOrigin;
     public float tokenSpacing = 0.32f;
+
 
     [Header("Material del halo dorado")]
     public Material energyHaloMaterial;
@@ -60,6 +66,13 @@ public class BoardManager : MonoBehaviour
     private List<GameObject> _enemyGodObjects = new();
     private List<GameObject> _myTokenObjects = new();
     private List<GameObject> _enemyTokenObjects = new();
+    // Mapa nombre de dios → índice de prefab en godPrefabs[]
+    private static readonly System.Collections.Generic.Dictionary<string, int> GodPrefabIndex =
+        new System.Collections.Generic.Dictionary<string, int>
+    {
+        {"BrunhildsFury", 0}, {"SkadisHunt", 1}, {"ThorsStrike", 2}, {"LokisTrick",    3},
+        {"BragisVerve",   4}, {"IdunsRejuvenat", 5}, {"MimirsWisdom", 6}, {"VarsBond", 7}
+    };
 
     // Orden de seleccion: indices de _myBowlObjects en el orden en que el jugador los selecciono.
     private List<int> _selectionOrder = new();
@@ -511,64 +524,90 @@ public class BoardManager : MonoBehaviour
 
     // ── Dioses y fichas ──────────────────────────────────────
 
-    /// Instancia las 2 figuras de dios de cada jugador usando la semilla del RoomId.
-    /// Índices 0-3 del array = dioses de daño; 4-7 = dioses de protección.
+    /// Instancia las 2 figuras de dios de cada jugador según sus dioses seleccionados.
     public void SpawnGodFigures()
     {
-        ClearGodsAndTokens();
-        if (godPrefabs == null || godPrefabs.Length < 8) return;
-        if (myGodOrigin == null || enemyGodOrigin == null) return;
+        ClearGodFigures();
 
-        // Mezcla determinista de los 8 dioses con la semilla de la sala
-        int seed = string.IsNullOrEmpty(GameData.RoomId) ? 0 : GameData.RoomId.GetHashCode();
-        var rng = new System.Random(seed);
-        var idx = new int[] { 0, 1, 2, 3, 4, 5, 6, 7 };
-        for (int i = 7; i > 0; i--)
-        {
-            int j = rng.Next(i + 1);
-            (idx[i], idx[j]) = (idx[j], idx[i]);
-        }
+        Debug.Log($"[Board] SpawnGodFigures | prefabs={godPrefabs?.Length} | MyGods={string.Join(",", GameData.MySelectedGods ?? new string[0])} | EnemyGods={string.Join(",", GameData.OpponentSelectedGods ?? new string[0])}");
 
-        // PlayerStart: idx[0] (daño), idx[4] (protección)
-        // PlayerSecond: idx[1] (daño), idx[5] (protección)
-        bool iAmStart = GameData.MyId == GameData.PlayerStartId;
-        int myDmg = iAmStart ? idx[0] : idx[1];
-        int myProt = iAmStart ? idx[4] : idx[5];
-        int enDmg = iAmStart ? idx[1] : idx[0];
-        int enProt = iAmStart ? idx[5] : idx[4];
+        if (godPrefabs == null || godPrefabs.Length < 8) { Debug.LogWarning("[Board] godPrefabs no asignados o faltan prefabs"); return; }
 
-        SpawnGodFigure(myDmg, "damage", myGodOrigin, _myGodObjects, isInteractable: true);
-        SpawnGodFigure(myProt, "protection", myGodOrigin, _myGodObjects, isInteractable: true);
-        SpawnGodFigure(enDmg, "damage", enemyGodOrigin, _enemyGodObjects, isInteractable: false);
-        SpawnGodFigure(enProt, "protection", enemyGodOrigin, _enemyGodObjects, isInteractable: false);
+        string[] myGods = GameData.MySelectedGods;
+        string[] enemyGods = GameData.OpponentSelectedGods;
+
+        if (myGods == null || myGods.Length < 2) { Debug.LogWarning($"[Board] MySelectedGods vacío o insuficiente: {myGods?.Length}"); return; }
+        if (enemyGods == null || enemyGods.Length < 2) { Debug.LogWarning($"[Board] OpponentSelectedGods vacío o insuficiente: {enemyGods?.Length}"); return; }
+
+        SpawnGodFigure(myGods[0], myGodPositions, 0, myGodRotation, _myGodObjects, isInteractable: false);
+        SpawnGodFigure(myGods[1], myGodPositions, 1, myGodRotation, _myGodObjects, isInteractable: false);
+        SpawnGodFigure(enemyGods[0], enemyGodPositions, 0, enemyGodRotation, _enemyGodObjects, isInteractable: false);
+        SpawnGodFigure(enemyGods[1], enemyGodPositions, 1, enemyGodRotation, _enemyGodObjects, isInteractable: false);
+
+        Debug.Log($"[Board] SpawnGodFigures completado | myGods={_myGodObjects.Count} | enemyGods={_enemyGodObjects.Count}");
     }
 
-    private void SpawnGodFigure(int prefabIdx, string favorType, Transform origin,
-                                 List<GameObject> list, bool isInteractable)
+    /// Activa la interacción en las figuras propias para la fase god-favor.
+    public void EnableGodFavorInteraction()
     {
-        if (prefabIdx < 0 || prefabIdx >= godPrefabs.Length || godPrefabs[prefabIdx] == null) return;
-        int slot = list.Count; // 0 = daño (izquierda), 1 = protección (derecha)
-        Vector3 pos = origin.position + new Vector3(0f, 0f, -1f) * slot * godSpacing;
-        var obj = Instantiate(godPrefabs[prefabIdx], pos, origin.rotation);
+        foreach (var obj in _myGodObjects)
+        {
+            if (obj == null) continue;
+            var ctrl = obj.GetComponent<GodFavorController>();
+            if (ctrl != null) ctrl.IsInteractable = true;
+        }
+    }
 
-        // Añadimos BoxCollider para detección de clicks
+    /// Desactiva la interacción en todas las figuras (tras elegir o al resolver).
+    public void DisableGodFavorInteraction()
+    {
+        foreach (var obj in _myGodObjects)
+        {
+            if (obj == null) continue;
+            var ctrl = obj.GetComponent<GodFavorController>();
+            if (ctrl != null) ctrl.IsInteractable = false;
+        }
+    }
+
+    private void SpawnGodFigure(string godName, Vector3[] positions, int slot,
+                                 Vector3 rotEuler, List<GameObject> list, bool isInteractable)
+    {
+        if (!GodPrefabIndex.TryGetValue(godName, out int prefabIdx))
+        {
+            Debug.LogWarning($"[Board] Dios '{godName}' no encontrado en GodPrefabIndex");
+            return;
+        }
+        if (prefabIdx < 0 || prefabIdx >= godPrefabs.Length || godPrefabs[prefabIdx] == null)
+        {
+            Debug.LogWarning($"[Board] Prefab para '{godName}' (idx={prefabIdx}) no asignado en Inspector");
+            return;
+        }
+        if (slot >= positions.Length)
+        {
+            Debug.LogWarning($"[Board] Slot {slot} fuera de rango");
+            return;
+        }
+
+        Vector3 pos = positions[slot];
+        Quaternion rot = Quaternion.Euler(rotEuler);
+        var obj = Instantiate(godPrefabs[prefabIdx], pos, rot);
+        obj.transform.localScale = Vector3.one * godFigureScale;
+
         if (obj.GetComponent<Collider>() == null)
             obj.AddComponent<BoxCollider>();
 
         var ctrl = obj.AddComponent<GodFavorController>();
-        ctrl.FavorType = favorType;
+        ctrl.GodName = godName;
         ctrl.IsInteractable = isInteractable;
         list.Add(obj);
     }
+
 
     /// Instancia las fichas doradas de energía de cada jugador.
     public void SpawnTokens(int myCount, int enemyCount)
     {
         if (tokenPrefab == null) return;
-        foreach (var o in _myTokenObjects) if (o) Destroy(o);
-        foreach (var o in _enemyTokenObjects) if (o) Destroy(o);
-        _myTokenObjects.Clear();
-        _enemyTokenObjects.Clear();
+        ClearTokens();
 
         if (myTokenOrigin != null)
             for (int i = 0; i < myCount; i++)
@@ -585,14 +624,18 @@ public class BoardManager : MonoBehaviour
             }
     }
 
-    private void ClearGodsAndTokens()
+    public void ClearGodFigures()
     {
         foreach (var o in _myGodObjects) if (o) Destroy(o);
         foreach (var o in _enemyGodObjects) if (o) Destroy(o);
-        foreach (var o in _myTokenObjects) if (o) Destroy(o);
-        foreach (var o in _enemyTokenObjects) if (o) Destroy(o);
         _myGodObjects.Clear();
         _enemyGodObjects.Clear();
+    }
+
+    private void ClearTokens()
+    {
+        foreach (var o in _myTokenObjects) if (o) Destroy(o);
+        foreach (var o in _enemyTokenObjects) if (o) Destroy(o);
         _myTokenObjects.Clear();
         _enemyTokenObjects.Clear();
     }
@@ -829,7 +872,7 @@ public class BoardManager : MonoBehaviour
         _enemyConfirmedObjects.Clear();
         _selectionOrder.Clear();
         _moveCoroutines.Clear(); // los objetos se destruyen, las coroutines mueren con ellos
-        ClearGodsAndTokens();
+        ClearTokens();
     }
 
     public void SpawnStones(int playerCount = 15, int opponentCount = 15)
