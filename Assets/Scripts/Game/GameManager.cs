@@ -9,21 +9,15 @@ public class GameManager : MonoBehaviour
     public static GameManager Instance { get; private set; }
 
     // Dados de la tirada actual (cuenco propio).
-    // Se llena cuando llega dice-rolled dirigido a mí.
     public List<DiceData> MyDice { get; private set; } = new();
 
     // Dados sobrantes tras confirmar (los que NO guardé).
-    // Se muestran en el cuenco propio mientras es el turno del rival.
-    // Se limpian cuando vuelvo a tirar o empieza nueva ronda.
     public List<DiceData> MySurvivors { get; private set; } = new();
 
     // Dados actuales en el cuenco del rival.
-    // Se establece cuando el rival tira, se reduce a los sobrantes cuando confirma.
-    // Se usa en RebuildAll para que el cuenco rival no quede vacío.
     public List<DiceData> EnemyCurrentBowl { get; private set; } = new();
 
     // Dados confirmados acumulados (la fila lateral).
-    // Se reconstruyen desde state.users[id].selectedRolls cuando confirmamos.
     public List<DiceData> MyConfirmed { get; private set; } = new();
     public List<DiceData> EnemyConfirmed { get; private set; } = new();
 
@@ -60,15 +54,15 @@ public class GameManager : MonoBehaviour
 
     public static event Action OnRollsChanged;
     public static event Action OnTurnChanged;
-    public static event Action OnGodFavorNeeded;   // muestra el panel de elección
-    public static event Action OnLifeUpdated;       // actualiza vidas/energía en la UI
+    public static event Action OnGodFavorNeeded;
+    public static event Action OnLifeUpdated;
 
     public static bool InputBlocked = false;
     private bool _animating = false;
     private bool _waitingServer = false;
     private DiceController _hoveredDice = null;
-    private int _myRollCount = 0;      // tiradas propias en la ronda actual (máx 3)
-    private bool _godFavorSelected = false; // ya elegí favor divino esta fase
+    private int _myRollCount = 0;
+    private bool _godFavorSelected = false;
     private GodFavorController _hoveredGod = null;
 
     void Awake()
@@ -85,8 +79,6 @@ public class GameManager : MonoBehaviour
         Debug.Log("[Game] GameManager.Start()");
         Debug.Log($"[Game] MyId:'{GameData.MyId}' | OpponentId:'{GameData.OpponentId}' | RoomId:'{GameData.RoomId}'");
 
-        // Al cargar GameScene, marcamos que el juego ha empezado y
-        // construimos el estado inicial: ronda 1, turno del playerStart.
         GameStarted = true;
         CurrentState = new GameState
         {
@@ -153,7 +145,6 @@ public class GameManager : MonoBehaviour
     {
         var mousePos = Mouse.current.position.ReadValue();
 
-        // Hover sobre dados
         var newDice = BoardManager.Instance?.GetHoveredDie(mousePos);
         if (newDice != _hoveredDice)
         {
@@ -162,7 +153,6 @@ public class GameManager : MonoBehaviour
             _hoveredDice = newDice;
         }
 
-        // Hover sobre figuras de dios (solo en fase god-favor)
         GodFavorController newGod = null;
         if (CurrentState?.state == "god-favor" && !_godFavorSelected)
             newGod = BoardManager.Instance?.GetHoveredGod(mousePos);
@@ -198,7 +188,6 @@ public class GameManager : MonoBehaviour
 
         Vector2 mousePos = Mouse.current.position.ReadValue();
         Ray ray = cam.ScreenPointToRay(mousePos);
-
         RaycastHit[] hits = Physics.RaycastAll(ray, 100f);
         Debug.Log($"[Game] Raycast desde ({mousePos.x:F0},{mousePos.y:F0}) → {hits.Length} hits");
 
@@ -209,13 +198,8 @@ public class GameManager : MonoBehaviour
         {
             var dice = h.collider.GetComponent<DiceController>();
             Debug.Log($"[Game]   hit: {h.collider.gameObject.name} | dice={(dice != null ? "OK" : "NULL")}");
-
             if (dice == null || dice.Data == null || !dice.Data.isMyDice) continue;
-            if (h.distance < closestDist)
-            {
-                closestDist = h.distance;
-                closest = dice;
-            }
+            if (h.distance < closestDist) { closestDist = h.distance; closest = dice; }
         }
 
         if (closest != null)
@@ -233,37 +217,21 @@ public class GameManager : MonoBehaviour
     {
         switch (type)
         {
-            case "dice-rolled":
-                HandleDiceRolled(body);
-                break;
-            case "selection-confirmed":
-                HandleSelectionConfirmed(body);
-                break;
-            case "round-start":
-                HandleRoundStart(body);
-                break;
-            case "god-favor":
-                HandleGodFavor(body);
-                break;
+            case "dice-rolled": HandleDiceRolled(body); break;
+            case "selection-confirmed": HandleSelectionConfirmed(body); break;
+            case "round-start": HandleRoundStart(body); break;
+            case "god-favor": HandleGodFavor(body); break;
             case "resolution-attack-first":
-            case "resolution-attack-second":
-                HandleResolution(body);
-                break;
-            case "game-over":
-                HandleGameOver(body);
-                break;
+            case "resolution-attack-second": HandleResolution(body); break;
+            case "game-over": HandleGameOver(body); break;
         }
     }
 
-    /// El servidor confirma que un jugador (yo o el rival) ha tirado.
-    /// Body: { user, rolls: [...], round }
     private void HandleDiceRolled(string body)
     {
         string user = ExtractStringValue(body, "user");
         string rollsArray = ExtractArray(body, "rolls");
-        var rolls = string.IsNullOrEmpty(rollsArray)
-            ? new List<DiceData>()
-            : ParseDiceArray(rollsArray);
+        var rolls = string.IsNullOrEmpty(rollsArray) ? new List<DiceData>() : ParseDiceArray(rollsArray);
 
         bool isMe = (user == GameData.MyId);
         Debug.Log($"[Game] dice-rolled de {(isMe ? "YO" : "RIVAL")} | {rolls.Count} dados");
@@ -271,22 +239,16 @@ public class GameManager : MonoBehaviour
 
         if (isMe)
         {
-            // Al tirar de nuevo, los sobrantes de la tirada anterior ya no son necesarios.
-            // BoardManager reutilizará sus GameObjects como base para la nueva animación.
             MySurvivors.Clear();
-
             MyDice = rolls;
             foreach (var d in MyDice) { d.isMyDice = true; d.kept = false; }
             _myRollCount++;
-            Debug.Log($"[Game] Antes de animar mi tirada: MyDiceRolled={MyDiceRolled} | tirada={_myRollCount}");
             StartCoroutine(AnimateMyRollAndUnlock());
         }
         else
         {
-            // El rival tira. Guardamos sus dados para RebuildAll.
             EnemyCurrentBowl = rolls;
             foreach (var d in EnemyCurrentBowl) { d.isMyDice = false; d.kept = false; }
-            Debug.Log($"[Game] Antes de animar tirada rival: rolls.Count={rolls.Count}");
             StartCoroutine(AnimateEnemyRollAndUnlock(rolls));
         }
     }
@@ -304,14 +266,11 @@ public class GameManager : MonoBehaviour
 
         Debug.Log($"[Game] Mi animación terminada | MyDiceRolled={MyDiceRolled} | tirada={_myRollCount}");
 
-        // Tirada 3: auto-confirmar todos los dados sin que el jugador pulse espacio.
-        // NO llamamos RefreshSelectionRow: los dados deben ir directamente al confirmed row
-        // (la animación de SpawnConfirmedRow los moverá desde el bowl hasta allí).
         if (_myRollCount >= 3)
         {
             Debug.Log("[Game] Tirada 3 → auto-confirmando todos los dados");
             foreach (var d in MyDice) d.kept = true;
-            yield return new WaitForSeconds(0.4f); // pausa breve para que el jugador vea sus dados
+            yield return new WaitForSeconds(0.4f);
             ConfirmSelection();
         }
     }
@@ -321,48 +280,42 @@ public class GameManager : MonoBehaviour
         InputBlocked = true;
         yield return BoardManager.Instance?.AnimateEnemyRoll(enemyRolls);
         InputBlocked = false;
-
         Debug.Log($"[Game] Animación rival terminada | InputBlocked={InputBlocked}");
     }
 
-    /// El servidor avisa de que un jugador acaba de confirmar.
-    /// Body: { user, selected: [...], state: {...} }
     private void HandleSelectionConfirmed(string body)
     {
         string user = ExtractStringValue(body, "user");
         bool isMe = (user == GameData.MyId);
 
-        // Actualizamos el estado completo
         string stateJson = ExtractObject(body, "state");
         if (!string.IsNullOrEmpty(stateJson))
         {
             CurrentState = ParseGameState(stateJson);
             Debug.Log($"[Game] Estado tras confirmación: {CurrentState?.state} | Turno: {CurrentState?.activePlayer} | Ronda: {CurrentState?.round}");
 
-            // Reconstruimos las filas confirmadas desde el state
             MyConfirmed = ParseSelectedRolls(stateJson, GameData.MyId);
             EnemyConfirmed = ParseSelectedRolls(stateJson, GameData.OpponentId);
-
             foreach (var d in MyConfirmed) { d.isMyDice = true; d.kept = true; }
             foreach (var d in EnemyConfirmed) { d.isMyDice = false; d.kept = true; }
+
+            // Parsear energía y actualizar tokens en tablero
+            MyEnergy = ParseIntField(stateJson, GameData.MyId, "energy");
+            OpponentEnergy = ParseIntField(stateJson, GameData.OpponentId, "energy");
+            Debug.Log($"[Game] selection-confirmed → MyEnergy:{MyEnergy} OppEnergy:{OpponentEnergy}");
+            BoardManager.Instance?.SpawnTokens(MyEnergy, OpponentEnergy);
         }
 
-        // Guardamos los dados sobrantes antes de limpiar.
         if (isMe)
         {
-            // Mis sobrantes: los que no guardé en esta tirada.
             MySurvivors = MyDice.FindAll(d => !d.kept);
             foreach (var d in MySurvivors) { d.isMyDice = false; d.kept = false; }
             Debug.Log($"[Game] MySurvivors guardados: {MySurvivors.Count} dados");
         }
         else
         {
-            // Sobrantes del rival: restamos los que guardó de su cuenco actual.
-            // Así sabemos qué dados le quedan visibles en el cuenco rival.
             string selectedArray = ExtractArray(body, "selected");
-            var selected = string.IsNullOrEmpty(selectedArray)
-                ? new List<DiceData>()
-                : ParseDiceArray(selectedArray);
+            var selected = string.IsNullOrEmpty(selectedArray) ? new List<DiceData>() : ParseDiceArray(selectedArray);
             var survivors = new List<DiceData>(EnemyCurrentBowl);
             foreach (var sel in selected)
             {
@@ -373,19 +326,14 @@ public class GameManager : MonoBehaviour
             Debug.Log($"[Game] EnemyCurrentBowl tras confirmación rival: {EnemyCurrentBowl.Count} sobrantes");
         }
 
-        // Reseteamos el cuenco propio: la próxima vez que sea mi turno
-        // tendré que pulsar espacio para tirar de nuevo.
         MyDice.Clear();
         MyDiceRolled = false;
         _waitingServer = false;
 
         Debug.Log($"[Game] selection-confirmed por {(isMe ? "YO" : "RIVAL")} | Mis confirmados:{MyConfirmed.Count} | Rival:{EnemyConfirmed.Count}");
 
-        // Animación de los dados moviéndose a la fila correspondiente.
         StartCoroutine(AnimateConfirmAndRebuild(isMe));
 
-        // Auto-skip: si ahora es mi turno pero ya tengo todos mis dados confirmados,
-        // envío una selección vacía para ceder el turno sin tirar dados.
         if (IsMyTurn && MyConfirmed.Count >= 6)
         {
             Debug.Log("[Game] Auto-skip: ya tengo 6 dados confirmados, cedo el turno");
@@ -405,10 +353,8 @@ public class GameManager : MonoBehaviour
         OnTurnChanged?.Invoke();
     }
 
-    /// El servidor envía god-favor cuando la última confirmación cierra la ronda
-    /// (segundo jugador en tirada 3, o totalSelects >= 12).
-    /// En ese caso NO se envía selection-confirmed, así que es este handler el que
-    /// limpia el estado y mueve los dados restantes a la fila confirmada.
+    // Auto-skip de dioses: responde inmediatamente con favor vacío.
+    // Cuando los dioses estén implementados, esto se ampliará con UI y animaciones.
     private void HandleGodFavor(string body)
     {
         string stateJson = ExtractObject(body, "state");
@@ -419,39 +365,25 @@ public class GameManager : MonoBehaviour
             EnemyConfirmed = ParseSelectedRolls(stateJson, GameData.OpponentId);
             foreach (var d in MyConfirmed) { d.isMyDice = true; d.kept = true; }
             foreach (var d in EnemyConfirmed) { d.isMyDice = false; d.kept = true; }
-        }
 
-        // Los dados que quedan en cuenco/selección se mueven a la fila confirmada.
-        MySurvivors.Clear();
-        MyDice.Clear();
-        EnemyCurrentBowl.Clear(); // evita que RebuildAll muestre dados en el bowl del rival
-        MyDiceRolled = false;
-        _waitingServer = false;
-
-        // Parse life/energy from god-favor state
-        if (!string.IsNullOrEmpty(stateJson))
-        {
             MyLife = ParseIntField(stateJson, GameData.MyId, "life");
             OpponentLife = ParseIntField(stateJson, GameData.OpponentId, "life");
             MyEnergy = ParseIntField(stateJson, GameData.MyId, "energy");
             OpponentEnergy = ParseIntField(stateJson, GameData.OpponentId, "energy");
         }
-        Debug.Log($"[Game] god-favor | MyConfirmed:{MyConfirmed.Count} | EnemyConfirmed:{EnemyConfirmed.Count} | MyEnergy:{MyEnergy}");
 
+        MySurvivors.Clear();
+        MyDice.Clear();
+        EnemyCurrentBowl.Clear();
+        MyDiceRolled = false;
+        _waitingServer = false;
         _godFavorSelected = false;
-        StartCoroutine(AnimateGodFavorSequence());
-        OnLifeUpdated?.Invoke();
-        OnRollsChanged?.Invoke();
-        OnTurnChanged?.Invoke();
-    }
 
-    private IEnumerator AnimateGodFavorSequence()
-    {
-        yield return AnimateConfirmAndRebuild(wasMe: true);
-        // Spawn tokens (energía acumulada) y figuras de dioses
         BoardManager.Instance?.SpawnTokens(MyEnergy, OpponentEnergy);
-        BoardManager.Instance?.EnableGodFavorInteraction();
-        OnGodFavorNeeded?.Invoke();
+
+        Debug.Log($"[Game] god-favor (auto-skip) | MyLife:{MyLife} OppLife:{OpponentLife} | MyEnergy:{MyEnergy} OppEnergy:{OpponentEnergy}");
+
+        SendGodFavor("");
     }
 
     private void HandleResolution(string body)
@@ -464,7 +396,11 @@ public class GameManager : MonoBehaviour
             MyEnergy = ParseIntField(stateJson, GameData.MyId, "energy");
             OpponentEnergy = ParseIntField(stateJson, GameData.OpponentId, "energy");
         }
-        Debug.Log($"[Game] Resolution | MyLife:{MyLife} OpponentLife:{OpponentLife} MyEnergy:{MyEnergy}");
+        Debug.Log($"[Game] Resolution | MyLife:{MyLife} OppLife:{OpponentLife} | MyEnergy:{MyEnergy} OppEnergy:{OpponentEnergy}");
+
+        BoardManager.Instance?.SpawnStones(MyLife, OpponentLife);
+        BoardManager.Instance?.SpawnTokens(MyEnergy, OpponentEnergy);
+
         var board = BoardManager.Instance;
         if (board != null) StartCoroutine(board.AnimateResolution());
         OnLifeUpdated?.Invoke();
@@ -473,15 +409,12 @@ public class GameManager : MonoBehaviour
     private void HandleGameOver(string body)
     {
         string winner = ExtractStringValue(body, "winner");
-        bool iWon = (winner == GameData.MyId);
-        Debug.Log($"[Game] game-over | winner:{winner} | iWon:{iWon}");
+        Debug.Log($"[Game] game-over | winner:{winner} | iWon:{winner == GameData.MyId}");
         GameData.WinnerId = winner;
-        // La UI reacciona a OnTurnChanged para mostrar el panel de game-over
         CurrentState = new GameState { state = "game-over", round = 0, activePlayer = "" };
         OnTurnChanged?.Invoke();
     }
 
-    /// El servidor avisa del inicio de una nueva ronda tras la resolución.
     private void HandleRoundStart(string body)
     {
         string stateJson = ExtractObject(body, "state");
@@ -490,6 +423,10 @@ public class GameManager : MonoBehaviour
             CurrentState = ParseGameState(stateJson);
             MyConfirmed = ParseSelectedRolls(stateJson, GameData.MyId);
             EnemyConfirmed = ParseSelectedRolls(stateJson, GameData.OpponentId);
+
+            MyEnergy = ParseIntField(stateJson, GameData.MyId, "energy");
+            OpponentEnergy = ParseIntField(stateJson, GameData.OpponentId, "energy");
+            BoardManager.Instance?.SpawnTokens(MyEnergy, OpponentEnergy);
         }
         MyDice.Clear();
         MySurvivors.Clear();
@@ -503,22 +440,17 @@ public class GameManager : MonoBehaviour
         OnTurnChanged?.Invoke();
     }
 
-    /// El jugador invoca un dios de los suyos, o "" para pasar.
     public void SendGodFavor(string godName)
     {
-        Debug.Log($"[Game] SendGodFavor: {godName}");
+        Debug.Log($"[Game] SendGodFavor: '{godName}'");
         WebSocketManager.Instance.Send("select-favor", "{\"godName\":\"" + godName + "\"}");
     }
 
-    /// Los dioses que eligió este jugador antes de la partida.
     public string[] MySelectedGods => GameData.MySelectedGods;
-
-    /// Los dioses que eligió el rival.
     public string[] OpponentSelectedGods => GameData.OpponentSelectedGods;
 
     private IEnumerator AutoSkipTurn()
     {
-        // Pequeña pausa para que AnimateConfirmAndRebuild empiece antes de enviar el skip.
         yield return new WaitForSeconds(0.4f);
         Debug.Log("[Game] AutoSkipTurn → enviando select-rolls vacío");
         WebSocketManager.Instance.Send("select-rolls", "{\"rolls\":[]}");
@@ -539,22 +471,20 @@ public class GameManager : MonoBehaviour
             if (!d.kept) continue;
             if (!first) sb.Append(',');
             first = false;
-            string energy = d.energy ? "true" : "false";
-            sb.Append("{\"face\":\"").Append(d.face).Append("\",\"energy\":").Append(energy).Append('}');
+            sb.Append("{\"face\":\"").Append(d.face).Append("\",\"energy\":").Append(d.energy ? "true" : "false").Append('}');
             keptCount++;
         }
         sb.Append(']');
 
-        string body = $"{{\"rolls\":{sb}}}";
-        WebSocketManager.Instance.Send("select-rolls", body);
-        Debug.Log($"[Game] Enviada selección al servidor: {keptCount} dados guardados");
+        WebSocketManager.Instance.Send("select-rolls", $"{{\"rolls\":{sb}}}");
+        Debug.Log($"[Game] Enviada selección: {keptCount} dados guardados");
 
         _waitingServer = true;
         OnRollsChanged?.Invoke();
         OnTurnChanged?.Invoke();
     }
 
-    // ── Helpers de parseo ─────────────────────────────────
+    // ── Helpers de parseo ──────────────────────────────────────────────────────
 
     private List<DiceData> ParseDiceArray(string arrayJson)
     {
@@ -566,21 +496,11 @@ public class GameManager : MonoBehaviour
             if (start == -1) break;
             int end = arrayJson.IndexOf('}', start);
             if (end == -1) break;
-
             string obj = arrayJson.Substring(start, end - start + 1);
             string faceStr = ExtractStringValue(obj, "face");
             bool energy = obj.Contains("\"energy\":true");
-
             if (Enum.TryParse<DiceFace>(faceStr, out DiceFace face))
-            {
-                result.Add(new DiceData
-                {
-                    face = face,
-                    energy = energy,
-                    kept = false,
-                    isMyDice = false
-                });
-            }
+                result.Add(new DiceData { face = face, energy = energy, kept = false, isMyDice = false });
             i = end + 1;
         }
         return result;
@@ -589,13 +509,10 @@ public class GameManager : MonoBehaviour
     private List<DiceData> ParseSelectedRolls(string stateJson, string userId)
     {
         if (string.IsNullOrEmpty(userId)) return new List<DiceData>();
-
         string userMarker = $"\"{userId}\":{{";
         int userStart = stateJson.IndexOf(userMarker);
         if (userStart == -1) return new List<DiceData>();
-
-        int depth = 0;
-        int i = userStart + userMarker.Length - 1;
+        int depth = 0, i = userStart + userMarker.Length - 1;
         int userObjStart = i;
         while (i < stateJson.Length)
         {
@@ -604,20 +521,18 @@ public class GameManager : MonoBehaviour
             i++;
         }
         if (i >= stateJson.Length) return new List<DiceData>();
-
         string userObj = stateJson.Substring(userObjStart, i - userObjStart + 1);
         string rollsArray = ExtractArray(userObj, "selectedRolls");
-        if (string.IsNullOrEmpty(rollsArray)) return new List<DiceData>();
-
-        return ParseDiceArray(rollsArray);
+        return string.IsNullOrEmpty(rollsArray) ? new List<DiceData>() : ParseDiceArray(rollsArray);
     }
 
     private GameState ParseGameState(string stateJson)
     {
-        var s = new GameState();
-        s.state = ExtractStringValue(stateJson, "state");
-        s.activePlayer = ExtractStringValue(stateJson, "activePlayer");
-
+        var s = new GameState
+        {
+            state = ExtractStringValue(stateJson, "state"),
+            activePlayer = ExtractStringValue(stateJson, "activePlayer")
+        };
         string roundMarker = "\"round\":";
         int rStart = stateJson.IndexOf(roundMarker);
         if (rStart != -1)
@@ -630,15 +545,13 @@ public class GameManager : MonoBehaviour
         return s;
     }
 
-    /// Extrae un int de users[userId][field] dentro del JSON de estado.
     private int ParseIntField(string stateJson, string userId, string field)
     {
         if (string.IsNullOrEmpty(userId)) return 0;
         string userMarker = "\"" + userId + "\":{";
         int uStart = stateJson.IndexOf(userMarker);
         if (uStart == -1) return 0;
-        int depth = 0, i = uStart + userMarker.Length - 1;
-        int uEnd = i;
+        int depth = 0, i = uStart + userMarker.Length - 1, uEnd = i;
         while (i < stateJson.Length)
         {
             if (stateJson[i] == '{') depth++;

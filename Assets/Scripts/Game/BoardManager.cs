@@ -224,6 +224,8 @@ public class BoardManager : MonoBehaviour
 
         SpawnConfirmedRow(gm.MyConfirmed, myKeptRowOrigin, _myConfirmedObjects, myStarts);
         SpawnConfirmedRow(gm.EnemyConfirmed, enemyKeptRowOrigin, _enemyConfirmedObjects, enemyStarts);
+
+        SpawnTokens(gm.MyEnergy, gm.OpponentEnergy);
     }
 
     /// Devuelve las caras decorativas (mías, del rival) generadas con la semilla
@@ -608,20 +610,35 @@ public class BoardManager : MonoBehaviour
     {
         if (tokenPrefab == null) return;
         ClearTokens();
+        SpawnTokenPiles(myCount, myTokenOrigin, _myTokenObjects);
+        SpawnTokenPiles(enemyCount, enemyTokenOrigin, _enemyTokenObjects);
+    }
 
-        if (myTokenOrigin != null)
-            for (int i = 0; i < myCount; i++)
-            {
-                Vector3 pos = myTokenOrigin.position + new Vector3(0f, 0f, -1f) * i * tokenSpacing;
-                _myTokenObjects.Add(Instantiate(tokenPrefab, pos, Quaternion.identity));
-            }
+    private void SpawnTokenPiles(int count, Transform origin, List<GameObject> list)
+    {
+        if (origin == null || count <= 0) return;
 
-        if (enemyTokenOrigin != null)
-            for (int i = 0; i < enemyCount; i++)
-            {
-                Vector3 pos = enemyTokenOrigin.position + new Vector3(0f, 0f, -1f) * i * tokenSpacing;
-                _enemyTokenObjects.Add(Instantiate(tokenPrefab, pos, Quaternion.identity));
-            }
+        int stackSize = 5;
+        float deltaX = 0.05f;   // +X por cada token dentro del montón
+        float deltaY = 0.15f;   // +Y por cada token dentro del montón
+        float pileGapZ = 0.4f;    // separación entre montones (en Z)
+
+        Quaternion rot = Quaternion.Euler(-90f, 0f, 0f);
+
+        for (int i = 0; i < count; i++)
+        {
+            int pile = i / stackSize;
+            int indexInPile = i % stackSize;
+
+            Vector3 pos = origin.position
+            + new Vector3((indexInPile + 1) * deltaX,
+                          (indexInPile + 1) * deltaY,
+                           pile * pileGapZ);
+
+            var token = Instantiate(tokenPrefab, pos, rot);
+            token.transform.localScale = Vector3.one;
+            list.Add(token);
+        }
     }
 
     public void ClearGodFigures()
@@ -871,8 +888,8 @@ public class BoardManager : MonoBehaviour
         _myConfirmedObjects.Clear();
         _enemyConfirmedObjects.Clear();
         _selectionOrder.Clear();
-        _moveCoroutines.Clear(); // los objetos se destruyen, las coroutines mueren con ellos
-        ClearTokens();
+        _moveCoroutines.Clear();
+        // ClearTokens() eliminado — los tokens los gestiona SpawnTokens explícitamente
     }
 
     public void SpawnStones(int playerCount = 15, int opponentCount = 15)
