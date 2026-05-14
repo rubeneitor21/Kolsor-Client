@@ -59,9 +59,14 @@ public class DiceController : MonoBehaviour
 
     private void SetEmission(Color color)
     {
-        var rend = GetComponent<Renderer>();
+        var rend = GetComponent<Renderer>()
+                ?? GetComponentInChildren<Renderer>();
         if (rend == null) return;
-        rend.material.EnableKeyword("_EMISSION");
-        rend.material.SetColor("_EmissionColor", color);
+        foreach (var mat in rend.materials)
+        {
+            if (mat == null) continue;
+            mat.EnableKeyword("_EMISSION");
+            mat.SetColor("_EmissionColor", color);
+        }
     }
 }

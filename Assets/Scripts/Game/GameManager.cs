@@ -8,20 +8,12 @@ public class GameManager : MonoBehaviour
 {
     public static GameManager Instance { get; private set; }
 
-    // Dados de la tirada actual (cuenco propio).
     public List<DiceData> MyDice { get; private set; } = new();
-
-    // Dados sobrantes tras confirmar (los que NO guardé).
     public List<DiceData> MySurvivors { get; private set; } = new();
-
-    // Dados actuales en el cuenco del rival.
     public List<DiceData> EnemyCurrentBowl { get; private set; } = new();
-
-    // Dados confirmados acumulados (la fila lateral).
     public List<DiceData> MyConfirmed { get; private set; } = new();
     public List<DiceData> EnemyConfirmed { get; private set; } = new();
 
-    // Estado del juego
     public GameState CurrentState { get; private set; }
     public int MyLife { get; private set; } = 15;
     public int OpponentLife { get; private set; } = 15;
@@ -30,25 +22,20 @@ public class GameManager : MonoBehaviour
     public bool IsMyTurn => CurrentState?.activePlayer == GameData.MyId;
     public string OpponentName => GameData.OpponentName;
 
-    // Banderas de control
     public bool MyDiceRolled { get; private set; } = false;
     public bool GameStarted { get; private set; } = false;
 
     public bool CanRoll => IsMyTurn
                            && CurrentState?.state == "select-rolls"
-                           && !MyDiceRolled
-                           && !InputBlocked
-                           && !_animating
-                           && !_waitingServer
+                           && !MyDiceRolled && !InputBlocked
+                           && !_animating && !_waitingServer
                            && GameStarted;
 
     public bool CanConfirm => IsMyTurn
-                              && CurrentState?.state == "select-rolls"
-                              && MyDiceRolled
-                              && MyDice != null && MyDice.Count > 0
-                              && !InputBlocked
-                              && !_animating
-                              && !_waitingServer;
+                           && CurrentState?.state == "select-rolls"
+                           && MyDiceRolled
+                           && MyDice != null && MyDice.Count > 0
+                           && !InputBlocked && !_animating && !_waitingServer;
 
     public bool CanClickDice => CanConfirm;
 
@@ -60,9 +47,10 @@ public class GameManager : MonoBehaviour
     public static bool InputBlocked = false;
     private bool _animating = false;
     private bool _waitingServer = false;
-    private DiceController _hoveredDice = null;
-    private int _myRollCount = 0;
     private bool _godFavorSelected = false;
+    private int _myRollCount = 0;
+
+    private DiceController _hoveredDice = null;
     private GodFavorController _hoveredGod = null;
 
     void Awake()
@@ -86,10 +74,9 @@ public class GameManager : MonoBehaviour
             round = 1,
             activePlayer = GameData.PlayerStartId
         };
-        MyConfirmed.Clear();
-        EnemyConfirmed.Clear();
-        MySurvivors.Clear();
-        EnemyCurrentBowl.Clear();
+
+        MyConfirmed.Clear(); EnemyConfirmed.Clear();
+        MySurvivors.Clear(); EnemyCurrentBowl.Clear();
 
         BoardManager.Instance?.RebuildAll();
         BoardManager.Instance?.SpawnGodFigures();
@@ -115,6 +102,7 @@ public class GameManager : MonoBehaviour
             {
                 Debug.Log("[Game] SPACE → pasar favor divino");
                 _godFavorSelected = true;
+                GodInfoCard.Instance?.ForceHide();
                 BoardManager.Instance?.DisableGodFavorInteraction();
                 SendGodFavor("");
             }
@@ -148,7 +136,7 @@ public class GameManager : MonoBehaviour
         var newDice = BoardManager.Instance?.GetHoveredDie(mousePos);
         if (newDice != _hoveredDice)
         {
-            _hoveredDice?.OnHoverExit();
+            if (_hoveredDice != null) _hoveredDice.OnHoverExit();
             newDice?.OnHoverEnter();
             _hoveredDice = newDice;
         }
@@ -158,7 +146,7 @@ public class GameManager : MonoBehaviour
             newGod = BoardManager.Instance?.GetHoveredGod(mousePos);
         if (newGod != _hoveredGod)
         {
-            _hoveredGod?.OnHoverExit();
+            if (_hoveredGod != null) _hoveredGod.OnHoverExit();
             newGod?.OnHoverEnter();
             _hoveredGod = newGod;
         }
@@ -169,12 +157,7 @@ public class GameManager : MonoBehaviour
         var ctrl = BoardManager.Instance?.GetHoveredGod(Mouse.current.position.ReadValue());
         if (ctrl == null || !ctrl.IsInteractable) return;
         ctrl.Select();
-        _godFavorSelected = true;
-        _hoveredGod = null;
-        BoardManager.Instance?.DisableGodFavorInteraction();
-        Debug.Log($"[Game] God click → {ctrl.GodName}");
-        SendGodFavor(ctrl.GodName);
-        OnTurnChanged?.Invoke();
+        GodInfoCard.Instance?.Lock(); // mantener el card abierto
     }
 
     private void HandleDiceClick()
@@ -203,14 +186,9 @@ public class GameManager : MonoBehaviour
         }
 
         if (closest != null)
-        {
-            Debug.Log($"[Game] ToggleKeep en dado: {closest.Data.face}");
             closest.ToggleKeep();
-        }
         else
-        {
             Debug.Log("[Game] No se encontró dado válido para clicar");
-        }
     }
 
     private void HandleMessage(string type, string body)
@@ -232,10 +210,9 @@ public class GameManager : MonoBehaviour
         string user = ExtractStringValue(body, "user");
         string rollsArray = ExtractArray(body, "rolls");
         var rolls = string.IsNullOrEmpty(rollsArray) ? new List<DiceData>() : ParseDiceArray(rollsArray);
-
         bool isMe = (user == GameData.MyId);
+
         Debug.Log($"[Game] dice-rolled de {(isMe ? "YO" : "RIVAL")} | {rolls.Count} dados");
-        Debug.Log($"[Game] HandleDiceRolled: InputBlocked={InputBlocked} | _animating={_animating} | _waitingServer={_waitingServer}");
 
         if (isMe)
         {
@@ -264,8 +241,6 @@ public class GameManager : MonoBehaviour
         OnRollsChanged?.Invoke();
         OnTurnChanged?.Invoke();
 
-        Debug.Log($"[Game] Mi animación terminada | MyDiceRolled={MyDiceRolled} | tirada={_myRollCount}");
-
         if (_myRollCount >= 3)
         {
             Debug.Log("[Game] Tirada 3 → auto-confirmando todos los dados");
@@ -280,7 +255,6 @@ public class GameManager : MonoBehaviour
         InputBlocked = true;
         yield return BoardManager.Instance?.AnimateEnemyRoll(enemyRolls);
         InputBlocked = false;
-        Debug.Log($"[Game] Animación rival terminada | InputBlocked={InputBlocked}");
     }
 
     private void HandleSelectionConfirmed(string body)
@@ -292,14 +266,11 @@ public class GameManager : MonoBehaviour
         if (!string.IsNullOrEmpty(stateJson))
         {
             CurrentState = ParseGameState(stateJson);
-            Debug.Log($"[Game] Estado tras confirmación: {CurrentState?.state} | Turno: {CurrentState?.activePlayer} | Ronda: {CurrentState?.round}");
-
             MyConfirmed = ParseSelectedRolls(stateJson, GameData.MyId);
             EnemyConfirmed = ParseSelectedRolls(stateJson, GameData.OpponentId);
             foreach (var d in MyConfirmed) { d.isMyDice = true; d.kept = true; }
             foreach (var d in EnemyConfirmed) { d.isMyDice = false; d.kept = true; }
 
-            // Parsear energía y actualizar tokens en tablero
             MyEnergy = ParseIntField(stateJson, GameData.MyId, "energy");
             OpponentEnergy = ParseIntField(stateJson, GameData.OpponentId, "energy");
             Debug.Log($"[Game] selection-confirmed → MyEnergy:{MyEnergy} OppEnergy:{OpponentEnergy}");
@@ -310,7 +281,6 @@ public class GameManager : MonoBehaviour
         {
             MySurvivors = MyDice.FindAll(d => !d.kept);
             foreach (var d in MySurvivors) { d.isMyDice = false; d.kept = false; }
-            Debug.Log($"[Game] MySurvivors guardados: {MySurvivors.Count} dados");
         }
         else
         {
@@ -323,7 +293,6 @@ public class GameManager : MonoBehaviour
                 if (match != null) survivors.Remove(match);
             }
             EnemyCurrentBowl = survivors;
-            Debug.Log($"[Game] EnemyCurrentBowl tras confirmación rival: {EnemyCurrentBowl.Count} sobrantes");
         }
 
         MyDice.Clear();
@@ -335,10 +304,7 @@ public class GameManager : MonoBehaviour
         StartCoroutine(AnimateConfirmAndRebuild(isMe));
 
         if (IsMyTurn && MyConfirmed.Count >= 6)
-        {
-            Debug.Log("[Game] Auto-skip: ya tengo 6 dados confirmados, cedo el turno");
             StartCoroutine(AutoSkipTurn());
-        }
 
         OnRollsChanged?.Invoke();
         OnTurnChanged?.Invoke();
@@ -353,8 +319,6 @@ public class GameManager : MonoBehaviour
         OnTurnChanged?.Invoke();
     }
 
-    // Auto-skip de dioses: responde inmediatamente con favor vacío.
-    // Cuando los dioses estén implementados, esto se ampliará con UI y animaciones.
     private void HandleGodFavor(string body)
     {
         string stateJson = ExtractObject(body, "state");
@@ -381,9 +345,75 @@ public class GameManager : MonoBehaviour
 
         BoardManager.Instance?.SpawnTokens(MyEnergy, OpponentEnergy);
 
-        Debug.Log($"[Game] god-favor (auto-skip) | MyLife:{MyLife} OppLife:{OpponentLife} | MyEnergy:{MyEnergy} OppEnergy:{OpponentEnergy}");
+        // ── Comprobar si el jugador puede invocar algún dios ──────────────────
+        bool canAffordAny = false;
+        if (GameData.MySelectedGods != null)
+        {
+            foreach (var god in GameData.MySelectedGods)
+            {
+                if (GodData.CanAffordAny(god, MyEnergy))
+                {
+                    canAffordAny = true;
+                    break;
+                }
+            }
+        }
 
-        SendGodFavor("");
+        if (!canAffordAny)
+        {
+            Debug.Log($"[Game] god-favor: sin tokens suficientes (MyEnergy:{MyEnergy}) → auto-skip");
+            BoardManager.Instance?.RebuildAll();
+            StartCoroutine(SendGodFavorDelayed("", 3f));
+            return;
+        }
+
+        // Hay al menos un dios asequible: activar interacción y esperar input
+        Debug.Log($"[Game] god-favor: activando selección | MyEnergy:{MyEnergy}");
+        CurrentState = new GameState
+        {
+            state = "god-favor",
+            round = CurrentState?.round ?? 0,
+            activePlayer = CurrentState?.activePlayer ?? ""
+        };
+        BoardManager.Instance?.RebuildAll();
+        BoardManager.Instance?.EnableGodFavorInteraction();
+        OnGodFavorNeeded?.Invoke();
+        OnTurnChanged?.Invoke();
+
+        // StartCoroutine(GodFavorAutoSkip(30f));
+    }
+
+    private IEnumerator SendGodFavorDelayed(string godName, float delay)
+    {
+        yield return new WaitForSeconds(delay);
+        SendGodFavor(godName);
+    }
+
+    /// Auto-skip si el jugador no interactúa en el tiempo límite.
+    private IEnumerator GodFavorAutoSkip(float seconds)
+    {
+        yield return new WaitForSeconds(seconds);
+        if (!_godFavorSelected)
+        {
+            Debug.Log("[Game] god-favor: auto-skip por tiempo agotado");
+            _godFavorSelected = true;
+            GodInfoCard.Instance?.ForceHide();
+            BoardManager.Instance?.DisableGodFavorInteraction();
+            SendGodFavor("");
+        }
+    }
+
+    /// Llamado desde GodInfoCard cuando el jugador pulsa "Elegir".
+    public void InvokeGodFromCard(string godName)
+    {
+        if (_godFavorSelected) return;
+        _godFavorSelected = true;
+        if (_hoveredGod != null) { _hoveredGod.OnHoverExit(); _hoveredGod = null; }
+        GodInfoCard.Instance?.ForceHide();
+        BoardManager.Instance?.DisableGodFavorInteraction();
+        Debug.Log($"[Game] InvokeGodFromCard → {godName}");
+        SendGodFavor(godName);
+        OnTurnChanged?.Invoke();
     }
 
     private void HandleResolution(string body)
@@ -428,9 +458,7 @@ public class GameManager : MonoBehaviour
             OpponentEnergy = ParseIntField(stateJson, GameData.OpponentId, "energy");
             BoardManager.Instance?.SpawnTokens(MyEnergy, OpponentEnergy);
         }
-        MyDice.Clear();
-        MySurvivors.Clear();
-        EnemyCurrentBowl.Clear();
+        MyDice.Clear(); MySurvivors.Clear(); EnemyCurrentBowl.Clear();
         MyDiceRolled = false;
         _waitingServer = false;
         _myRollCount = 0;
@@ -463,8 +491,7 @@ public class GameManager : MonoBehaviour
         if (!CanConfirm) return;
 
         var sb = new System.Text.StringBuilder();
-        bool first = true;
-        int keptCount = 0;
+        bool first = true; int keptCount = 0;
         sb.Append('[');
         foreach (var d in MyDice)
         {
@@ -478,7 +505,6 @@ public class GameManager : MonoBehaviour
 
         WebSocketManager.Instance.Send("select-rolls", $"{{\"rolls\":{sb}}}");
         Debug.Log($"[Game] Enviada selección: {keptCount} dados guardados");
-
         _waitingServer = true;
         OnRollsChanged?.Invoke();
         OnTurnChanged?.Invoke();
@@ -492,10 +518,8 @@ public class GameManager : MonoBehaviour
         int i = 0;
         while (i < arrayJson.Length)
         {
-            int start = arrayJson.IndexOf('{', i);
-            if (start == -1) break;
-            int end = arrayJson.IndexOf('}', start);
-            if (end == -1) break;
+            int start = arrayJson.IndexOf('{', i); if (start == -1) break;
+            int end = arrayJson.IndexOf('}', start); if (end == -1) break;
             string obj = arrayJson.Substring(start, end - start + 1);
             string faceStr = ExtractStringValue(obj, "face");
             bool energy = obj.Contains("\"energy\":true");
@@ -512,8 +536,7 @@ public class GameManager : MonoBehaviour
         string userMarker = $"\"{userId}\":{{";
         int userStart = stateJson.IndexOf(userMarker);
         if (userStart == -1) return new List<DiceData>();
-        int depth = 0, i = userStart + userMarker.Length - 1;
-        int userObjStart = i;
+        int depth = 0, i = userStart + userMarker.Length - 1, userObjStart = i;
         while (i < stateJson.Length)
         {
             if (stateJson[i] == '{') depth++;
@@ -526,23 +549,22 @@ public class GameManager : MonoBehaviour
         return string.IsNullOrEmpty(rollsArray) ? new List<DiceData>() : ParseDiceArray(rollsArray);
     }
 
-    private GameState ParseGameState(string stateJson)
+    private GameState ParseGameState(string stateJson) => new GameState
     {
-        var s = new GameState
-        {
-            state = ExtractStringValue(stateJson, "state"),
-            activePlayer = ExtractStringValue(stateJson, "activePlayer")
-        };
-        string roundMarker = "\"round\":";
-        int rStart = stateJson.IndexOf(roundMarker);
-        if (rStart != -1)
-        {
-            rStart += roundMarker.Length;
-            int rEnd = rStart;
-            while (rEnd < stateJson.Length && (char.IsDigit(stateJson[rEnd]) || stateJson[rEnd] == '-')) rEnd++;
-            int.TryParse(stateJson.Substring(rStart, rEnd - rStart), out s.round);
-        }
-        return s;
+        state = ExtractStringValue(stateJson, "state"),
+        activePlayer = ExtractStringValue(stateJson, "activePlayer"),
+        round = ParseRoundField(stateJson)
+    };
+
+    private int ParseRoundField(string stateJson)
+    {
+        string marker = "\"round\":";
+        int rStart = stateJson.IndexOf(marker);
+        if (rStart == -1) return 0;
+        rStart += marker.Length;
+        int rEnd = rStart;
+        while (rEnd < stateJson.Length && (char.IsDigit(stateJson[rEnd]) || stateJson[rEnd] == '-')) rEnd++;
+        return int.TryParse(stateJson.Substring(rStart, rEnd - rStart), out int v) ? v : 0;
     }
 
     private int ParseIntField(string stateJson, string userId, string field)
@@ -571,8 +593,7 @@ public class GameManager : MonoBehaviour
     private string ExtractArray(string json, string key)
     {
         string marker = $"\"{key}\":[";
-        int start = json.IndexOf(marker);
-        if (start == -1) return "";
+        int start = json.IndexOf(marker); if (start == -1) return "";
         start += marker.Length - 1;
         int depth = 0, i = start;
         while (i < json.Length)
@@ -587,8 +608,7 @@ public class GameManager : MonoBehaviour
     private string ExtractObject(string json, string key)
     {
         string marker = $"\"{key}\":{{";
-        int start = json.IndexOf(marker);
-        if (start == -1) return "";
+        int start = json.IndexOf(marker); if (start == -1) return "";
         start += marker.Length - 1;
         int depth = 0, i = start;
         while (i < json.Length)
@@ -603,8 +623,7 @@ public class GameManager : MonoBehaviour
     private string ExtractStringValue(string json, string key)
     {
         string search = $"\"{key}\":\"";
-        int start = json.IndexOf(search);
-        if (start == -1) return "";
+        int start = json.IndexOf(search); if (start == -1) return "";
         start += search.Length;
         int end = json.IndexOf("\"", start);
         return end == -1 ? "" : json.Substring(start, end - start);

@@ -1,11 +1,11 @@
 ﻿using UnityEngine;
 
 /// Componente añadido a cada figura de dios en la mesa.
-/// Gestiona hover, selección e invocación.
+/// Gestiona hover, selección e invocación, y muestra/oculta el GodInfoCard.
 [RequireComponent(typeof(Collider))]
 public class GodFavorController : MonoBehaviour
 {
-    /// Nombre del dios: "ThorsStrike", "BrunhildsFury", etc.
+    /// Nombre interno del dios: "ThorsStrike", "BrunhildsFury", etc.
     public string GodName;
 
     /// Solo true para las figuras del jugador local durante la fase god-favor.
@@ -24,12 +24,21 @@ public class GodFavorController : MonoBehaviour
 
     public void OnHoverEnter()
     {
-        if (IsInteractable && !_selected) SetEmission(HoverColor);
+        // Mostrar card siempre en fase god-favor (interactuable o no)
+        var gm = GameManager.Instance;
+        if (gm != null && gm.CurrentState?.state == "god-favor")
+            GodInfoCard.Instance?.Show(GodName, gm.MyEnergy, transform.position);
+
+        if (IsInteractable && !_selected)
+            SetEmission(HoverColor);
     }
 
     public void OnHoverExit()
     {
-        if (!_selected) SetEmission(IsInteractable ? Color.black : PassiveColor);
+        GodInfoCard.Instance?.Hide();
+
+        if (!_selected)
+            SetEmission(IsInteractable ? Color.black : PassiveColor);
     }
 
     public void Select()

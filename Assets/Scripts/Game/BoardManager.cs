@@ -1,11 +1,26 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using Unity.VisualScripting;
 using UnityEngine;
 
 public class BoardManager : MonoBehaviour
 {
     public static BoardManager Instance { get; private set; }
+
+    [Header("Materiales de caras de dado")]
+    public Material matHacha;
+    public Material matFlecha;
+    public Material matCasco;
+    public Material matEscudo;
+    public Material matMano;
+
+    [Header("Texturas de caras de dado")]
+    public Texture2D texFlecha;
+    public Texture2D texHacha;
+    public Texture2D texCasco;
+    public Texture2D texEscudo;
+    public Texture2D texMano;
 
     [Header("Prefabs")]
     public GameObject dicePrefab;
@@ -790,11 +805,15 @@ public class BoardManager : MonoBehaviour
 
     private GameObject SpawnDice(DiceData data, Vector3 pos, bool isMine, bool decorative)
     {
+        Debug.Log($"[Board] SpawnDice | dicePrefab={dicePrefab != null} | data={data != null} | face={data?.face}");
         var obj = Instantiate(dicePrefab, pos, Quaternion.identity);
+        Debug.Log($"[Board] SpawnDice | obj={obj != null} | renderer={obj?.GetComponent<Renderer>() != null} | rendererInChildren={obj?.GetComponentInChildren<Renderer>() != null}");
         ApplyDiceColor(obj, data);
 
-        var ctrl = obj.GetComponent<DiceController>();
+        var ctrl = obj.GetComponent<DiceController>()
+                ?? obj.GetComponentInChildren<DiceController>();
         if (ctrl == null) ctrl = obj.AddComponent<DiceController>();
+        Debug.Log($"[Board] SpawnDice | ctrl={ctrl != null} | decorative={decorative}"); // ← nuevo
 
         if (decorative)
         {
@@ -813,17 +832,35 @@ public class BoardManager : MonoBehaviour
         return obj;
     }
 
+    private static readonly Dictionary<DiceFace, Vector3> FaceRotations = new()
+{
+    { DiceFace.Axe,    new Vector3(  0,  0,   0) },
+    { DiceFace.Hand,   new Vector3( 90,  0,   0) },
+    { DiceFace.Shield, new Vector3(180,  0,   0) },
+    { DiceFace.Helmet, new Vector3(  0,  0,  90) },
+    { DiceFace.Arrow,  new Vector3(  0,  0, -90) },
+};
+
     private void ApplyDiceColor(GameObject obj, DiceData data)
     {
-        var renderer = obj.GetComponent<Renderer>();
+        var renderer = obj.GetComponent<Renderer>()
+                    ?? obj.GetComponentInChildren<Renderer>();
         if (renderer == null) return;
-        var mat = renderer.material;
-        if (FaceColors.TryGetValue(data.face, out Color color)) mat.color = color;
-        mat.EnableKeyword("_EMISSION");
-        mat.SetColor("_EmissionColor", Color.black);
+
+        // Rotar para que la cara correcta quede visible
+        if (FaceRotations.TryGetValue(data.face, out Vector3 rot))
+            obj.transform.rotation = Quaternion.Euler(rot);
+
+        var mats = renderer.materials;
+        foreach (var mat in mats)
+        {
+            if (mat == null) continue;
+            mat.EnableKeyword("_EMISSION");
+            mat.SetColor("_EmissionColor", Color.black);
+        }
+        renderer.materials = mats;
         ApplyEnergyHalo(obj, data.energy);
     }
-
     private void ApplyEnergyHalo(GameObject diceObj, bool hasEnergy)
     {
         Transform existing = diceObj.transform.Find("EnergyHalo");
@@ -834,47 +871,48 @@ public class BoardManager : MonoBehaviour
         }
         if (existing != null) return;
 
-        // Usamos esfera en lugar de cubo: una esfera alrededor de un cubo
-        // da efecto de aura/halo orgánico. Un cubo dentro de otro cubo
-        // simplemente parece el mismo dado un poco más grande.
-        var halo = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        // Obtener renderer PRIMERO — lo necesitamos para bounds y material
+        var diceRenderer = diceObj.GetComponent<Renderer>()
+                        ?? diceObj.GetComponentInChildren<Renderer>();
+        if (diceRenderer == null) return;
+
+        var meshObj = diceRenderer.gameObject;
+
+        var halo = GameObject.CreatePrimitive(PrimitiveType.Cube);
         halo.name = "EnergyHalo";
-        halo.transform.SetParent(diceObj.transform, worldPositionStays: false);
+        halo.transform.SetParent(meshObj.transform, worldPositionStays: false);
         halo.transform.localPosition = Vector3.zero;
         halo.transform.localRotation = Quaternion.identity;
-        halo.transform.localScale = Vector3.one * 1.5f;
+
+        var bounds = diceRenderer.bounds;
+        float worldSize = Mathf.Max(bounds.size.x, bounds.size.y, bounds.size.z) * 1.08f;
+        Vector3 ps = meshObj.transform.lossyScale;
+        halo.transform.localScale = new Vector3(
+            worldSize / ps.x,
+            worldSize / ps.y,
+            worldSize / ps.z
+        );
 
         var col = halo.GetComponent<Collider>();
         if (col != null) Destroy(col);
 
-        // Tomamos el shader del propio dado en lugar de buscarlo por nombre.
-        // Shader.Find("Standard") puede devolver null en la build si Unity no
-        // incluye ese shader con ese nombre exacto → resultado: material morado.
-        // Usando el material del dado garantizamos que el shader ya está incluido.
-        var diceRenderer = diceObj.GetComponent<Renderer>();
         var mat = new Material(diceRenderer.material);
-
-        // Modo Transparent
-        mat.SetFloat("_Mode", 3);
-        mat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
-        mat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-        mat.SetInt("_ZWrite", 0);
-        mat.DisableKeyword("_ALPHATEST_ON");
-        mat.EnableKeyword("_ALPHABLEND_ON");
-        mat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
-        mat.renderQueue = 3000;
-
-        // Color dorado semitransparente — alfa 0.35 da el efecto de aura sin tapar el dado
-        mat.color = new Color(1f, 0.78f, 0.20f, 0.35f);
-
-        // Emisión dorada suave para que brille un poco
+        mat.mainTexture = null;
+        mat.SetFloat("_Surface", 1f);
+        mat.SetFloat("_Blend", 3f);
+        mat.SetFloat("_ZWrite", 0f);
+        mat.SetFloat("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+        mat.SetFloat("_DstBlend", (int)UnityEngine.Rendering.BlendMode.One);
+        mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+        mat.renderQueue = 3001;
+        mat.color = new Color(1f, 0.75f, 0.1f, 0.15f);
         mat.EnableKeyword("_EMISSION");
-        mat.SetColor("_EmissionColor", new Color(0.4f, 0.28f, 0f));
+        mat.SetColor("_EmissionColor", new Color(0.8f, 0.55f, 0f) * 1.5f);
 
-        var haloRenderer = halo.GetComponent<Renderer>();
-        haloRenderer.material = mat;
-        haloRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        haloRenderer.receiveShadows = false;
+        var rend = halo.GetComponent<Renderer>();
+        rend.material = mat;
+        rend.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        rend.receiveShadows = false;
     }
 
     private void ClearBowlsAndKept()
