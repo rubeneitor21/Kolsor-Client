@@ -426,14 +426,21 @@ public class GameManager : MonoBehaviour
             MyEnergy = ParseIntField(stateJson, GameData.MyId, "energy");
             OpponentEnergy = ParseIntField(stateJson, GameData.OpponentId, "energy");
         }
-        Debug.Log($"[Game] Resolution | MyLife:{MyLife} OppLife:{OpponentLife} | MyEnergy:{MyEnergy} OppEnergy:{OpponentEnergy}");
+        Debug.Log($"[Game] Resolution | MyLife:{MyLife} OppLife:{OpponentLife}");
 
-        BoardManager.Instance?.SpawnStones(MyLife, OpponentLife);
-        BoardManager.Instance?.SpawnTokens(MyEnergy, OpponentEnergy);
+        // Retrasar la actualización de piedras para que se vea la animación
+        StartCoroutine(DelayedStoneUpdate());
 
         var board = BoardManager.Instance;
         if (board != null) StartCoroutine(board.AnimateResolution());
         OnLifeUpdated?.Invoke();
+    }
+
+    private IEnumerator DelayedStoneUpdate()
+    {
+        yield return new WaitForSeconds(1.5f);
+        BoardManager.Instance?.SpawnStones(MyLife, OpponentLife);
+        BoardManager.Instance?.SpawnTokens(MyEnergy, OpponentEnergy);
     }
 
     private void HandleGameOver(string body)
@@ -447,13 +454,19 @@ public class GameManager : MonoBehaviour
 
     private void HandleRoundStart(string body)
     {
+        StartCoroutine(DelayedRoundStart(body));
+    }
+
+    private IEnumerator DelayedRoundStart(string body)
+    {
+        yield return new WaitForSeconds(3f); // esperar animación de resolución
+
         string stateJson = ExtractObject(body, "state");
         if (!string.IsNullOrEmpty(stateJson))
         {
             CurrentState = ParseGameState(stateJson);
             MyConfirmed = ParseSelectedRolls(stateJson, GameData.MyId);
             EnemyConfirmed = ParseSelectedRolls(stateJson, GameData.OpponentId);
-
             MyEnergy = ParseIntField(stateJson, GameData.MyId, "energy");
             OpponentEnergy = ParseIntField(stateJson, GameData.OpponentId, "energy");
             BoardManager.Instance?.SpawnTokens(MyEnergy, OpponentEnergy);

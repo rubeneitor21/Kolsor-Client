@@ -237,8 +237,8 @@ public class BoardManager : MonoBehaviour
                 : enemyNewStarts[newIdx]);
         }
 
-        SpawnConfirmedRow(gm.MyConfirmed, myKeptRowOrigin, _myConfirmedObjects, myStarts);
-        SpawnConfirmedRow(gm.EnemyConfirmed, enemyKeptRowOrigin, _enemyConfirmedObjects, enemyStarts);
+        SpawnConfirmedRow(gm.MyConfirmed, myKeptRowOrigin, _myConfirmedObjects, myStarts, isMine: false);
+        SpawnConfirmedRow(gm.EnemyConfirmed, enemyKeptRowOrigin, _enemyConfirmedObjects, enemyStarts, isMine: true);
 
         SpawnTokens(gm.MyEnergy, gm.OpponentEnergy);
     }
@@ -271,17 +271,25 @@ public class BoardManager : MonoBehaviour
     ///   - Dados del rival: posiciones del bowl del rival
     ///   - Si startPositions[i] == Vector3.zero → sin animación (dado ya estaba confirmado)
     private void SpawnConfirmedRow(List<DiceData> dice, Transform previewOrigin,
-                                   List<GameObject> list, List<Vector3> startPositions)
+                               List<GameObject> list, List<Vector3> startPositions,
+                               bool isMine)
     {
         if (dice == null || previewOrigin == null) return;
         var p = previewOrigin.position;
         Vector3 confirmedOrigin = new Vector3(p.x, p.y, confirmedRowZ);
+
+        Quaternion baseRot = isMine
+            ? Quaternion.identity
+            : Quaternion.Euler(0f, 180f, 0f);
+
         for (int i = 0; i < dice.Count; i++)
         {
             Vector3 endPos = confirmedOrigin + new Vector3(0f, 0f, -1f) * i * keptRowSpacing + Vector3.up * keptYOffset;
             bool hasStart = startPositions != null && i < startPositions.Count && startPositions[i] != Vector3.zero;
             Vector3 startPos = hasStart ? startPositions[i] : endPos;
             var obj = SpawnDice(dice[i], startPos, isMine: false, decorative: true);
+            if (!isMine && FaceRotations.TryGetValue(dice[i].face, out Vector3 faceRot))
+                obj.transform.rotation = Quaternion.Euler(0f, 180f, 0f) * Quaternion.Euler(faceRot);
             list.Add(obj);
             if (hasStart) MoveObject(obj, endPos);
         }
@@ -701,64 +709,120 @@ public class BoardManager : MonoBehaviour
         var gm = GameManager.Instance;
         if (gm == null) yield break;
 
-        float myX = myKeptRowOrigin != null ? myKeptRowOrigin.position.x : -0.5f;
-        float enemyX = enemyKeptRowOrigin != null ? enemyKeptRowOrigin.position.x : 0.5f;
+        bool iAmStart = (GameData.MyId == GameData.PlayerStartId);
+
+        List<DiceData> startDice = iAmStart ? gm.MyConfirmed : gm.EnemyConfirmed;
+        List<DiceData> secondDice = iAmStart ? gm.EnemyConfirmed : gm.MyConfirmed;
+        List<GameObject> startObjs = iAmStart ? _myConfirmedObjects : _enemyConfirmedObjects;
+        List<GameObject> secondObjs = iAmStart ? _enemyConfirmedObjects : _myConfirmedObjects;
+
+        float startX = -0.5f; // columna del jugador que empieza
+        float secondX = 0.5f; // columna del segundo jugador
         float y = (myKeptRowOrigin?.position.y ?? 0f) + keptYOffset;
-        float startZ = confirmedRowZ;
-        const float zoneGap = 0.3f;
+        float z = 2.5f; // empieza desde arriba y baja en Z
 
-        // Índices de cada tipo para mis dados y los del rival
-        var myIdx = GetIndicesByType(gm.MyConfirmed);
-        var enIdx = GetIndicesByType(gm.EnemyConfirmed);
+        var startIdx = GetIndicesByType(startDice);
+        var secondIdx = GetIndicesByType(secondDice);
+        var startMoves = new Dictionary<int, Vector3>();
+        var secondMoves = new Dictionary<int, Vector3>();
 
-        var myMoves = new Dictionary<int, Vector3>();
-        var enemyMoves = new Dictionary<int, Vector3>();
-        float zOff = 0f;
-
-        void PlaceZone(List<int> left, List<int> right, bool leftIsMine)
+        void PlaceColumn(List<int> startList, List<int> secondList)
         {
-            int slots = Mathf.Max(left.Count, right.Count);
+            int slots = Mathf.Max(startList.Count, secondList.Count);
             if (slots == 0) return;
             for (int i = 0; i < slots; i++)
             {
-                float z = startZ - zOff;
-                if (i < left.Count)
-                {
-                    var pos = new Vector3(leftIsMine ? myX : enemyX, y, z);
-                    if (leftIsMine) myMoves[left[i]] = pos;
-                    else enemyMoves[left[i]] = pos;
-                }
-                if (i < right.Count)
-                {
-                    var pos = new Vector3(leftIsMine ? enemyX : myX, y, z);
-                    if (leftIsMine) enemyMoves[right[i]] = pos;
-                    else myMoves[right[i]] = pos;
-                }
-                zOff += keptRowSpacing;
+                if (i < startList.Count)
+                    startMoves[startList[i]] = new Vector3(startX, y, z);
+                if (i < secondList.Count)
+                    secondMoves[secondList[i]] = new Vector3(secondX, y, z);
+                z -= keptRowSpacing;
             }
-            zOff += zoneGap;
+            z -= 0.2f; // separación entre zonas
         }
 
-        // Zona 1: My Axe  vs Enemy Helmet
-        PlaceZone(myIdx[DiceFace.Axe], enIdx[DiceFace.Helmet], leftIsMine: true);
-        // Zona 2: My Arrow vs Enemy Shield
-        PlaceZone(myIdx[DiceFace.Arrow], enIdx[DiceFace.Shield], leftIsMine: true);
-        // Zona 3: Hand (ambos, lado a lado)
-        PlaceZone(myIdx[DiceFace.Hand], enIdx[DiceFace.Hand], leftIsMine: true);
-        // Zona 4: Enemy Axe vs My Helmet
-        PlaceZone(enIdx[DiceFace.Axe], myIdx[DiceFace.Helmet], leftIsMine: false);
-        // Zona 5: Enemy Arrow vs My Shield
-        PlaceZone(enIdx[DiceFace.Arrow], myIdx[DiceFace.Shield], leftIsMine: false);
+        // Zona 1: Hachas de start atacan Cascos de second
+        PlaceColumn(startIdx[DiceFace.Axe], secondIdx[DiceFace.Helmet]);
+        // Zona 2: Flechas de start atacan Escudos de second
+        PlaceColumn(startIdx[DiceFace.Arrow], secondIdx[DiceFace.Shield]);
+        // Zona 3: Cascos de start defienden Hachas de second
+        PlaceColumn(startIdx[DiceFace.Helmet], secondIdx[DiceFace.Axe]);
+        // Zona 4: Escudos de start defienden Flechas de second
+        PlaceColumn(startIdx[DiceFace.Shield], secondIdx[DiceFace.Arrow]);
+        // Zona 5: Manos
+        PlaceColumn(startIdx[DiceFace.Hand], secondIdx[DiceFace.Hand]);
+        // Corregir rotaciones tras mover
+        for (int i = 0; i < startDice.Count && i < startObjs.Count; i++)
+        {
+            if (startObjs[i] == null) continue;
+            if (FaceRotations.TryGetValue(startDice[i].face, out Vector3 rot))
+                startObjs[i].transform.rotation = Quaternion.Euler(0f, 180f, 0f) * Quaternion.Euler(rot);
+        }
+        for (int i = 0; i < secondDice.Count && i < secondObjs.Count; i++)
+        {
+            if (secondObjs[i] == null) continue;
+            if (FaceRotations.TryGetValue(secondDice[i].face, out Vector3 rot))
+                secondObjs[i].transform.rotation = Quaternion.Euler(rot);
+        }
 
-        // Aplicar movimientos
-        foreach (var kv in myMoves)
-            if (kv.Key < _myConfirmedObjects.Count && _myConfirmedObjects[kv.Key] != null)
-                MoveObject(_myConfirmedObjects[kv.Key], kv.Value);
-        foreach (var kv in enemyMoves)
-            if (kv.Key < _enemyConfirmedObjects.Count && _enemyConfirmedObjects[kv.Key] != null)
-                MoveObject(_enemyConfirmedObjects[kv.Key], kv.Value);
+        foreach (var kv in startMoves)
+        {
+            if (kv.Key < startObjs.Count && startObjs[kv.Key] != null)
+            {
+                Debug.Log($"[Board] Moviendo startObj[{kv.Key}] → {kv.Value}");
+                MoveObject(startObjs[kv.Key], kv.Value);
+            }
+            else
+                Debug.Log($"[Board] startObj[{kv.Key}] es NULL o fuera de rango ({startObjs.Count})");
+        }
+        foreach (var kv in secondMoves)
+        {
+            if (kv.Key < secondObjs.Count && secondObjs[kv.Key] != null)
+            {
+                Debug.Log($"[Board] Moviendo secondObj[{kv.Key}] → {kv.Value}");
+                MoveObject(secondObjs[kv.Key], kv.Value);
+            }
+            else
+                Debug.Log($"[Board] secondObj[{kv.Key}] es NULL o fuera de rango ({secondObjs.Count})");
+        }
 
-        yield return new WaitForSeconds(0.4f);
+        yield return new WaitForSeconds(2.5f);
+    }
+
+    private void PlaceZone(
+    List<int> attackerIdx, List<int> defenderIdx,
+    float attackerX, float defenderX, float y, ref float z,
+    Dictionary<int, Vector3> attackerMoves,
+    Dictionary<int, Vector3> defenderMoves)
+    {
+        int slots = Mathf.Max(attackerIdx.Count, defenderIdx.Count);
+        if (slots == 0) return;
+        Debug.Log($"[Board] PlaceZone | attackers:{attackerIdx.Count} defenders:{defenderIdx.Count} | z={z:F2} | attackerX={attackerX:F2} defenderX={defenderX:F2}");
+        for (int i = 0; i < slots; i++)
+        {
+            if (i < attackerIdx.Count)
+            {
+                attackerMoves[attackerIdx[i]] = new Vector3(attackerX, y, z);
+                Debug.Log($"[Board]   attacker[{attackerIdx[i]}] → ({attackerX:F2}, {y:F2}, {z:F2})");
+            }
+            if (i < defenderIdx.Count)
+            {
+                defenderMoves[defenderIdx[i]] = new Vector3(defenderX, y, z);
+                Debug.Log($"[Board]   defender[{defenderIdx[i]}] → ({defenderX:F2}, {y:F2}, {z:F2})");
+            }
+            z -= keptRowSpacing;
+        }
+        z -= 0.15f;
+    }
+
+    private void PlaceHands(
+        List<int> startHands, List<int> secondHands,
+        float startX, float secondX, float y, ref float z,
+        Dictionary<int, Vector3> startMoves,
+        Dictionary<int, Vector3> secondMoves)
+    {
+        foreach (var idx in startHands) { startMoves[idx] = new Vector3(startX, y, z); z -= keptRowSpacing; }
+        foreach (var idx in secondHands) { secondMoves[idx] = new Vector3(secondX, y, z); z -= keptRowSpacing; }
     }
 
     private static Dictionary<DiceFace, List<int>> GetIndicesByType(List<DiceData> dice)
@@ -805,12 +869,12 @@ public class BoardManager : MonoBehaviour
 
     private GameObject SpawnDice(DiceData data, Vector3 pos, bool isMine, bool decorative)
     {
-        Debug.Log($"[Board] SpawnDice | dicePrefab={dicePrefab != null} | data={data != null} | face={data?.face}");
         var obj = Instantiate(dicePrefab, pos, Quaternion.identity);
-        Debug.Log($"[Board] SpawnDice | obj={obj != null} | renderer={obj?.GetComponent<Renderer>() != null} | rendererInChildren={obj?.GetComponentInChildren<Renderer>() != null}");
         ApplyDiceColor(obj, data);
+        // ... resto igual
+   
 
-        var ctrl = obj.GetComponent<DiceController>()
+    var ctrl = obj.GetComponent<DiceController>()
                 ?? obj.GetComponentInChildren<DiceController>();
         if (ctrl == null) ctrl = obj.AddComponent<DiceController>();
         Debug.Log($"[Board] SpawnDice | ctrl={ctrl != null} | decorative={decorative}"); // ← nuevo
@@ -847,7 +911,6 @@ public class BoardManager : MonoBehaviour
                     ?? obj.GetComponentInChildren<Renderer>();
         if (renderer == null) return;
 
-        // Rotar para que la cara correcta quede visible
         if (FaceRotations.TryGetValue(data.face, out Vector3 rot))
             obj.transform.rotation = Quaternion.Euler(rot);
 
