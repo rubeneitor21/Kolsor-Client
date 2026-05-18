@@ -14,6 +14,8 @@ public class GameManager : MonoBehaviour
     public List<DiceData> MyConfirmed { get; private set; } = new();
     public List<DiceData> EnemyConfirmed { get; private set; } = new();
 
+    public int MyEnergyPreHands { get; private set; } = 0;
+    public int OpponentEnergyPreHands { get; private set; } = 0;
     public GameState CurrentState { get; private set; }
     public int MyLife { get; private set; } = 15;
     public int OpponentLife { get; private set; } = 15;
@@ -37,7 +39,7 @@ public class GameManager : MonoBehaviour
                            && MyDice != null && MyDice.Count > 0
                            && !InputBlocked && !_animating && !_waitingServer;
 
-    public bool CanClickDice => CanConfirm;
+    public bool CanClickDice => CanConfirm && _myRollCount < 3;
 
     public static event Action OnRollsChanged;
     public static event Action OnTurnChanged;
@@ -49,6 +51,7 @@ public class GameManager : MonoBehaviour
     private bool _waitingServer = false;
     private bool _godFavorSelected = false;
     private int _myRollCount = 0;
+    private bool _resolutionAnimated = false;
 
     private DiceController _hoveredDice = null;
     private GodFavorController _hoveredGod = null;
@@ -199,8 +202,8 @@ public class GameManager : MonoBehaviour
             case "selection-confirmed": HandleSelectionConfirmed(body); break;
             case "round-start": HandleRoundStart(body); break;
             case "god-favor": HandleGodFavor(body); break;
-            case "resolution-attack-first":
-            case "resolution-attack-second": HandleResolution(body); break;
+            case "resolution-attack-first": HandleResolution(body, isSecond: false); break;
+            case "resolution-attack-second": HandleResolution(body, isSecond: true); break;
             case "game-over": HandleGameOver(body); break;
         }
     }
@@ -334,6 +337,16 @@ public class GameManager : MonoBehaviour
             OpponentLife = ParseIntField(stateJson, GameData.OpponentId, "life");
             MyEnergy = ParseIntField(stateJson, GameData.MyId, "energy");
             OpponentEnergy = ParseIntField(stateJson, GameData.OpponentId, "energy");
+
+            // Guardar energía PRE-manos: energía actual + tokens de dados con energy:true
+            // (el servidor suma estos en resolution(), no en god-favor, así que hay que contarlos aquí)
+            int myEnergyDice = 0;
+            if (MyConfirmed != null) foreach (var d in MyConfirmed) if (d.energy) myEnergyDice++;
+            int oppEnergyDice = 0;
+            if (EnemyConfirmed != null) foreach (var d in EnemyConfirmed) if (d.energy) oppEnergyDice++;
+            MyEnergyPreHands = MyEnergy + myEnergyDice;
+            OpponentEnergyPreHands = OpponentEnergy + oppEnergyDice;
+            Debug.Log($"[Game] EnergyPreHands | Me:{MyEnergyPreHands} (base:{MyEnergy}+dice:{myEnergyDice}) | Opp:{OpponentEnergyPreHands} (base:{OpponentEnergy}+dice:{oppEnergyDice})");
         }
 
         MySurvivors.Clear();
@@ -343,9 +356,6 @@ public class GameManager : MonoBehaviour
         _waitingServer = false;
         _godFavorSelected = false;
 
-        BoardManager.Instance?.SpawnTokens(MyEnergy, OpponentEnergy);
-
-        // ── Comprobar si el jugador puede invocar algún dios ──────────────────
         bool canAffordAny = false;
         if (GameData.MySelectedGods != null)
         {
@@ -367,7 +377,6 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        // Hay al menos un dios asequible: activar interacción y esperar input
         Debug.Log($"[Game] god-favor: activando selección | MyEnergy:{MyEnergy}");
         CurrentState = new GameState
         {
@@ -375,12 +384,11 @@ public class GameManager : MonoBehaviour
             round = CurrentState?.round ?? 0,
             activePlayer = CurrentState?.activePlayer ?? ""
         };
+
         BoardManager.Instance?.RebuildAll();
         BoardManager.Instance?.EnableGodFavorInteraction();
         OnGodFavorNeeded?.Invoke();
         OnTurnChanged?.Invoke();
-
-        // StartCoroutine(GodFavorAutoSkip(30f));
     }
 
     private IEnumerator SendGodFavorDelayed(string godName, float delay)
@@ -416,7 +424,7 @@ public class GameManager : MonoBehaviour
         OnTurnChanged?.Invoke();
     }
 
-    private void HandleResolution(string body)
+    private void HandleResolution(string body, bool isSecond)
     {
         string stateJson = ExtractObject(body, "state");
         if (!string.IsNullOrEmpty(stateJson))
@@ -426,40 +434,36 @@ public class GameManager : MonoBehaviour
             MyEnergy = ParseIntField(stateJson, GameData.MyId, "energy");
             OpponentEnergy = ParseIntField(stateJson, GameData.OpponentId, "energy");
         }
+
+        if (!isSecond) return;
+
         Debug.Log($"[Game] Resolution | MyLife:{MyLife} OppLife:{OpponentLife}");
 
-        // Retrasar la actualización de piedras para que se vea la animación
-        StartCoroutine(DelayedStoneUpdate());
+        _resolutionAnimationStarted = true;
+
+        if (ResolutionAnimator.Instance != null)
+            ResolutionAnimator.Instance.OnAnimationComplete = () =>
+            {
+                BoardManager.Instance?.SpawnStones(MyLife, OpponentLife);
+                if (_pendingGameOverBody != null)
+                {
+                    ExecuteGameOver();
+                }
+                else if (_pendingRoundStartBody != null)
+                {
+                    StartCoroutine(ExecuteRoundStart(_pendingRoundStartBody));
+                    _pendingRoundStartBody = null;
+                }
+            };
 
         var board = BoardManager.Instance;
         if (board != null) StartCoroutine(board.AnimateResolution());
         OnLifeUpdated?.Invoke();
     }
 
-    private IEnumerator DelayedStoneUpdate()
+    private IEnumerator ExecuteRoundStart(string body)
     {
-        yield return new WaitForSeconds(1.5f);
-        BoardManager.Instance?.SpawnStones(MyLife, OpponentLife);
-        BoardManager.Instance?.SpawnTokens(MyEnergy, OpponentEnergy);
-    }
-
-    private void HandleGameOver(string body)
-    {
-        string winner = ExtractStringValue(body, "winner");
-        Debug.Log($"[Game] game-over | winner:{winner} | iWon:{winner == GameData.MyId}");
-        GameData.WinnerId = winner;
-        CurrentState = new GameState { state = "game-over", round = 0, activePlayer = "" };
-        OnTurnChanged?.Invoke();
-    }
-
-    private void HandleRoundStart(string body)
-    {
-        StartCoroutine(DelayedRoundStart(body));
-    }
-
-    private IEnumerator DelayedRoundStart(string body)
-    {
-        yield return new WaitForSeconds(3f); // esperar animación de resolución
+        yield return new WaitForSeconds(0.5f); // pequeña pausa tras las piedras
 
         string stateJson = ExtractObject(body, "state");
         if (!string.IsNullOrEmpty(stateJson))
@@ -476,9 +480,66 @@ public class GameManager : MonoBehaviour
         _waitingServer = false;
         _myRollCount = 0;
         _godFavorSelected = false;
+        _resolutionAnimationStarted = false;
         BoardManager.Instance?.RebuildAll();
         OnRollsChanged?.Invoke();
         OnTurnChanged?.Invoke();
+    }
+
+    private IEnumerator DelayedStoneUpdate()
+    {
+        yield return new WaitForSeconds(1.5f);
+        BoardManager.Instance?.SpawnStones(MyLife, OpponentLife);
+        BoardManager.Instance?.SpawnTokens(MyEnergy, OpponentEnergy);
+    }
+
+    private void HandleGameOver(string body)
+    {
+        string winner = ExtractStringValue(body, "winner");
+        Debug.Log($"[Game] game-over | winner:{winner} | iWon:{winner == GameData.MyId}");
+        GameData.WinnerId = winner;
+        _pendingGameOverBody = body;
+
+        if (_resolutionAnimationStarted)
+        {
+            // Caso normal: animación ya en marcha (game-over tras resolution-attack-second).
+            // OnAnimationComplete llamará a ExecuteGameOver cuando termine.
+            return;
+        }
+
+        // Caso especial: game-over tras resolution-attack-first (el rival murió en el primer ataque).
+        // Arrancamos la animación ahora para que las piedras bajen antes de mostrar el panel.
+        if (ResolutionAnimator.Instance != null)
+        {
+            ResolutionAnimator.Instance.OnAnimationComplete = () =>
+            {
+                BoardManager.Instance?.SpawnStones(MyLife, OpponentLife);
+                ExecuteGameOver();
+            };
+            var board = BoardManager.Instance;
+            if (board != null) { StartCoroutine(board.AnimateResolution()); return; }
+        }
+
+        // Fallback si no hay animador ni tablero: mostrar panel directamente.
+        ExecuteGameOver();
+    }
+
+    private void ExecuteGameOver()
+    {
+        _pendingGameOverBody = null;
+        CurrentState = new GameState { state = "game-over", round = 0, activePlayer = "" };
+        OnTurnChanged?.Invoke();
+    }
+
+    private string _pendingRoundStartBody = null;
+    private string _pendingGameOverBody = null;
+    private bool _resolutionAnimationStarted = false;
+
+    private void HandleRoundStart(string body)
+    {
+        _pendingRoundStartBody = body;
+        if (ResolutionAnimator.Instance == null)
+            StartCoroutine(ExecuteRoundStart(body));
     }
 
     public void SendGodFavor(string godName)

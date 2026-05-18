@@ -1420,7 +1420,7 @@ MonoBehaviour:
   texEscudo: {fileID: 2800000, guid: ebffccb86728f4f49b5f19b300e3825e, type: 3}
   texMano: {fileID: 2800000, guid: 7128c5720b8a34b43949b1114153e568, type: 3}
   dicePrefab: {fileID: 8262808193048576824, guid: 5773aeeb227194f49b47e72d9adfbb5d, type: 3}
-  stonePrefab: {fileID: 2126606148947184456, guid: 60fe1d0bf142a83458897c8c1361569e, type: 3}
+  stonePrefab: {fileID: 9200914996312953083, guid: cd584f4de0a9c874da661f1c75e164e8, type: 3}
   playerStonesOrigin: {fileID: 217808974}
   opponentStonesOrigin: {fileID: 928152379}
   myBowlCenter: {fileID: 453777726}
@@ -5142,6 +5142,60 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &2030786632
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2030786634}
+  - component: {fileID: 2030786633}
+  m_Layer: 0
+  m_Name: ResolutionAnimator
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &2030786633
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2030786632}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4507b37d6ea71fe4d97d0efa4b8f548e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::ResolutionAnimator
+  arrowPrefab: {fileID: 919132149155446097, guid: 7ef2a25e6c3e3e04b8afed24535fdcee, type: 3}
+  axePrefab: {fileID: 919132149155446097, guid: f4961d1f6573b1048b3eced71a039cf6, type: 3}
+  shieldPrefab: {fileID: 919132149155446097, guid: f3b69f28e4daee041b88880c779c8461, type: 3}
+  helmetPrefab: {fileID: 919132149155446097, guid: 541057bdbf28bbc4e9e2d3f01542c317, type: 3}
+  handSprite: {fileID: 21300000, guid: 491aad232af233641a0dac0e89a45dca, type: 3}
+  projectileSpeed: 3.5
+  impactPauseSecs: 0.2
+  zonePauseSecs: 0.5
+  weaponScale: 1
+  handScale: 0.05
+--- !u!4 &2030786634
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2030786632}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 2.5, y: 0, z: 2}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &2114641108
 GameObject:
   m_ObjectHideFlags: 0
@@ -5276,6 +5330,7 @@ SceneRoots:
   - {fileID: 1546513617}
   - {fileID: 730769971}
   - {fileID: 754637218}
+  - {fileID: 2030786634}
   - {fileID: 267783215}
   - {fileID: 1062936662}
   - {fileID: 715582439}

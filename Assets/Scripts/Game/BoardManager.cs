@@ -8,6 +8,11 @@ public class BoardManager : MonoBehaviour
 {
     public static BoardManager Instance { get; private set; }
 
+    public List<GameObject> GetPlayerStones() => _playerStones;
+    public List<GameObject> GetOpponentStones() => _opponentStones;
+    public List<GameObject> GetPlayerTokens() => _myTokenObjects;
+    public List<GameObject> GetOpponentTokens() => _enemyTokenObjects;
+
     [Header("Materiales de caras de dado")]
     public Material matHacha;
     public Material matFlecha;
@@ -716,10 +721,12 @@ public class BoardManager : MonoBehaviour
         List<GameObject> startObjs = iAmStart ? _myConfirmedObjects : _enemyConfirmedObjects;
         List<GameObject> secondObjs = iAmStart ? _enemyConfirmedObjects : _myConfirmedObjects;
 
-        float startX = -0.5f; // columna del jugador que empieza
-        float secondX = 0.5f; // columna del segundo jugador
+        float myX = myKeptRowOrigin?.position.x ?? -0.5f;
+        float enemyX = enemyKeptRowOrigin?.position.x ?? 0.5f;
+        float startX = iAmStart ? myX : enemyX;
+        float secondX = iAmStart ? enemyX : myX;
         float y = (myKeptRowOrigin?.position.y ?? 0f) + keptYOffset;
-        float z = 2.5f; // empieza desde arriba y baja en Z
+        float z = 2.5f;
 
         var startIdx = GetIndicesByType(startDice);
         var secondIdx = GetIndicesByType(secondDice);
@@ -738,20 +745,15 @@ public class BoardManager : MonoBehaviour
                     secondMoves[secondList[i]] = new Vector3(secondX, y, z);
                 z -= keptRowSpacing;
             }
-            z -= 0.2f; // separación entre zonas
+            z -= 0.2f;
         }
 
-        // Zona 1: Hachas de start atacan Cascos de second
         PlaceColumn(startIdx[DiceFace.Axe], secondIdx[DiceFace.Helmet]);
-        // Zona 2: Flechas de start atacan Escudos de second
         PlaceColumn(startIdx[DiceFace.Arrow], secondIdx[DiceFace.Shield]);
-        // Zona 3: Cascos de start defienden Hachas de second
         PlaceColumn(startIdx[DiceFace.Helmet], secondIdx[DiceFace.Axe]);
-        // Zona 4: Escudos de start defienden Flechas de second
         PlaceColumn(startIdx[DiceFace.Shield], secondIdx[DiceFace.Arrow]);
-        // Zona 5: Manos
         PlaceColumn(startIdx[DiceFace.Hand], secondIdx[DiceFace.Hand]);
-        // Corregir rotaciones tras mover
+
         for (int i = 0; i < startDice.Count && i < startObjs.Count; i++)
         {
             if (startObjs[i] == null) continue;
@@ -765,30 +767,47 @@ public class BoardManager : MonoBehaviour
                 secondObjs[i].transform.rotation = Quaternion.Euler(rot);
         }
 
-        foreach (var kv in startMoves)
-        {
-            if (kv.Key < startObjs.Count && startObjs[kv.Key] != null)
-            {
-                Debug.Log($"[Board] Moviendo startObj[{kv.Key}] → {kv.Value}");
-                MoveObject(startObjs[kv.Key], kv.Value);
-            }
-            else
-                Debug.Log($"[Board] startObj[{kv.Key}] es NULL o fuera de rango ({startObjs.Count})");
-        }
-        foreach (var kv in secondMoves)
-        {
-            if (kv.Key < secondObjs.Count && secondObjs[kv.Key] != null)
-            {
-                Debug.Log($"[Board] Moviendo secondObj[{kv.Key}] → {kv.Value}");
-                MoveObject(secondObjs[kv.Key], kv.Value);
-            }
-            else
-                Debug.Log($"[Board] secondObj[{kv.Key}] es NULL o fuera de rango ({secondObjs.Count})");
-        }
+        // Mostrar fichas PRE-manos y quitar halos de energy ANTES de mover los dados
+        // (valores ya corregidos en HandleGodFavor: energía base + dados con energy:true)
+        Debug.Log($"[Board] AnimateResolution SpawnTokens | MyEnergyPreHands:{gm.MyEnergyPreHands} OppEnergyPreHands:{gm.OpponentEnergyPreHands}");
+        SpawnTokens(gm.MyEnergyPreHands, gm.OpponentEnergyPreHands);
+        ClearEnergyHalos();
 
-        yield return new WaitForSeconds(2.5f);
+        foreach (var kv in startMoves)
+            if (kv.Key < startObjs.Count && startObjs[kv.Key] != null)
+                MoveObject(startObjs[kv.Key], kv.Value);
+        foreach (var kv in secondMoves)
+            if (kv.Key < secondObjs.Count && secondObjs[kv.Key] != null)
+                MoveObject(secondObjs[kv.Key], kv.Value);
+
+        yield return new WaitForSeconds(0.5f);
+
+        // Animación de armas
+        if (ResolutionAnimator.Instance != null)
+            yield return ResolutionAnimator.Instance.PlayResolution(
+                startDice, secondDice, startObjs, secondObjs, iAmStart);
+
+        yield return new WaitForSeconds(0.5f);
     }
 
+    private void ClearEnergyHalos()
+    {
+        var allConfirmed = new List<GameObject>(_myConfirmedObjects);
+        allConfirmed.AddRange(_enemyConfirmedObjects);
+
+        foreach (var obj in allConfirmed)
+        {
+            if (obj == null) continue;
+            foreach (Transform t in obj.GetComponentsInChildren<Transform>())
+            {
+                if (t != null && t.name == "EnergyHalo")
+                {
+                    Destroy(t.gameObject);
+                    break;
+                }
+            }
+        }
+    }
     private void PlaceZone(
     List<int> attackerIdx, List<int> defenderIdx,
     float attackerX, float defenderX, float y, ref float z,
@@ -872,10 +891,10 @@ public class BoardManager : MonoBehaviour
         var obj = Instantiate(dicePrefab, pos, Quaternion.identity);
         ApplyDiceColor(obj, data);
         // ... resto igual
-   
 
-    var ctrl = obj.GetComponent<DiceController>()
-                ?? obj.GetComponentInChildren<DiceController>();
+
+        var ctrl = obj.GetComponent<DiceController>()
+                    ?? obj.GetComponentInChildren<DiceController>();
         if (ctrl == null) ctrl = obj.AddComponent<DiceController>();
         Debug.Log($"[Board] SpawnDice | ctrl={ctrl != null} | decorative={decorative}"); // ← nuevo
 
@@ -1014,7 +1033,7 @@ public class BoardManager : MonoBehaviour
                 Vector3 pos = origin.position
                     + Vector3.right * col * spacingX
                     + Vector3.forward * row * spacingZ;
-                list.Add(Instantiate(stonePrefab, pos, Quaternion.identity));
+                list.Add(Instantiate(stonePrefab, pos, Quaternion.Euler(90f, 0f, 0f)));
                 index++;
             }
         }
