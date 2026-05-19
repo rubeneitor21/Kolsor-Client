@@ -75,7 +75,7 @@ public class GodSelectionUI : MonoBehaviour
     {
         _selected.Clear();
         string def1 = System.Array.IndexOf(_availableGods, "ThorsStrike") >= 0 ? "ThorsStrike" : _availableGods[0];
-        string def2 = System.Array.IndexOf(_availableGods, "BragisVerve") >= 0 ? "BragisVerve" : _availableGods[1];
+        string def2 = System.Array.IndexOf(_availableGods, "IdunsRejuvenat") >= 0 ? "IdunsRejuvenat" : _availableGods[1];
         _selected.Add(def1);
         _selected.Add(def2);
         RefreshButtonColors();
@@ -235,24 +235,16 @@ public class GodSelectionUI : MonoBehaviour
         "ThorsStrike" => "Thor",
         "BrunhildsFury" => "Brunhild",
         "SkadisHunt" => "Skadi",
-        "LokisTrick" => "Loki",
-        "BragisVerve" => "Bragi",
         "IdunsRejuvenat" => "Idun",
-        "MimirsWisdom" => "Mimir",
-        "VarsBond" => "Var",
         _ => g
     };
 
     private static string CostLine(string g) => g switch
     {
-        "ThorsStrike" => "Da\u00F1o directo 2/5/8 vidas \u2022 Coste: 4/8/12",
-        "BrunhildsFury" => "Tus Hachas \u00D71.5/2/3 \u2022 Coste: 6/10/18",
+        "ThorsStrike" => "Da\u00F1o directo 2/5/8 \u2022 Coste: 4/8/12",
+        "BrunhildsFury" => "Tus Hachas \u00D72/3/4 \u2022 Coste: 6/10/14",
         "SkadisHunt" => "Tus Flechas \u00D72/3/4 \u2022 Coste: 6/10/14",
-        "LokisTrick" => "Cancela 1/2/3 dados rivales \u2022 Coste: 3/6/9",
-        "BragisVerve" => "+2/3/4 fichas por Mano \u2022 Coste: 4/8/12",
         "IdunsRejuvenat" => "Cura 2/4/6 vidas \u2022 Coste: 4/7/10",
-        "MimirsWisdom" => "+1/2/3 fichas por da\u00F1o recibido \u2022 Coste: 3/5/7",
-        "VarsBond" => "+1/2/3 vida por ficha rival gastada \u2022 Coste: 10/14/18",
         _ => ""
     };
 }

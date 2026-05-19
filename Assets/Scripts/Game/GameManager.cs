@@ -16,6 +16,13 @@ public class GameManager : MonoBehaviour
 
     public int MyEnergyPreHands { get; private set; } = 0;
     public int OpponentEnergyPreHands { get; private set; } = 0;
+    // Energía base de god-favor (sin dados de energía) — usada para calcular el tier
+    public int MyGodFavorEnergy { get; private set; } = 0;
+    public int OpponentGodFavorEnergy { get; private set; } = 0;
+    public string MyInvokedGod { get; private set; } = "";
+    public string OpponentInvokedGod { get; private set; } = "";
+    public int MyInvokedGodTier { get; private set; } = 0;
+    public int OpponentInvokedGodTier { get; private set; } = 0;
     public GameState CurrentState { get; private set; }
     public int MyLife { get; private set; } = 15;
     public int OpponentLife { get; private set; } = 15;
@@ -338,15 +345,17 @@ public class GameManager : MonoBehaviour
             MyEnergy = ParseIntField(stateJson, GameData.MyId, "energy");
             OpponentEnergy = ParseIntField(stateJson, GameData.OpponentId, "energy");
 
-            // Guardar energía PRE-manos: energía actual + tokens de dados con energy:true
-            // (el servidor suma estos en resolution(), no en god-favor, así que hay que contarlos aquí)
+            // Energía base (lo que usó el servidor para calcular el tier del dios)
+            MyGodFavorEnergy = MyEnergy;
+            OpponentGodFavorEnergy = OpponentEnergy;
+
+            // Energía PRE-manos: base + dados con energy:true de esta ronda
             int myEnergyDice = 0;
             if (MyConfirmed != null) foreach (var d in MyConfirmed) if (d.energy) myEnergyDice++;
             int oppEnergyDice = 0;
             if (EnemyConfirmed != null) foreach (var d in EnemyConfirmed) if (d.energy) oppEnergyDice++;
             MyEnergyPreHands = MyEnergy + myEnergyDice;
             OpponentEnergyPreHands = OpponentEnergy + oppEnergyDice;
-            Debug.Log($"[Game] EnergyPreHands | Me:{MyEnergyPreHands} (base:{MyEnergy}+dice:{myEnergyDice}) | Opp:{OpponentEnergyPreHands} (base:{OpponentEnergy}+dice:{oppEnergyDice})");
         }
 
         MySurvivors.Clear();
@@ -385,6 +394,7 @@ public class GameManager : MonoBehaviour
             activePlayer = CurrentState?.activePlayer ?? ""
         };
 
+        NotificationUI.Instance?.Show("Selecciona dioses u omite con espacio.", 2f);
         BoardManager.Instance?.RebuildAll();
         BoardManager.Instance?.EnableGodFavorInteraction();
         OnGodFavorNeeded?.Invoke();
@@ -435,7 +445,25 @@ public class GameManager : MonoBehaviour
             OpponentEnergy = ParseIntField(stateJson, GameData.OpponentId, "energy");
         }
 
-        if (!isSecond) return;
+        if (!isSecond)
+        {
+            MyInvokedGod = ParseStringField(stateJson, GameData.MyId, "godFavor");
+            OpponentInvokedGod = ParseStringField(stateJson, GameData.OpponentId, "godFavor");
+
+            if (!string.IsNullOrEmpty(MyInvokedGod) && GodData.All.TryGetValue(MyInvokedGod, out var myInfo))
+            {
+                int tier = GodData.GetAffordableTier(MyInvokedGod, MyGodFavorEnergy);
+                MyInvokedGodTier = tier;
+                if (tier > 0) MyEnergyPreHands = Mathf.Max(0, MyEnergyPreHands - myInfo.Tiers[tier - 1].Cost);
+            }
+            if (!string.IsNullOrEmpty(OpponentInvokedGod) && GodData.All.TryGetValue(OpponentInvokedGod, out var oppInfo))
+            {
+                int tier = GodData.GetAffordableTier(OpponentInvokedGod, OpponentGodFavorEnergy);
+                OpponentInvokedGodTier = tier;
+                if (tier > 0) OpponentEnergyPreHands = Mathf.Max(0, OpponentEnergyPreHands - oppInfo.Tiers[tier - 1].Cost);
+            }
+            return;
+        }
 
         Debug.Log($"[Game] Resolution | MyLife:{MyLife} OppLife:{OpponentLife}");
 
@@ -481,7 +509,16 @@ public class GameManager : MonoBehaviour
         _myRollCount = 0;
         _godFavorSelected = false;
         _resolutionAnimationStarted = false;
+        MyInvokedGod = "";
+        OpponentInvokedGod = "";
+        MyInvokedGodTier = 0;
+        OpponentInvokedGodTier = 0;
         BoardManager.Instance?.RebuildAll();
+
+        bool isMyTurn = CurrentState?.activePlayer == GameData.MyId;
+        string turnMsg = isMyTurn ? "Tu turno" : "Turno del rival";
+        NotificationUI.Instance?.Show(turnMsg);
+
         OnRollsChanged?.Invoke();
         OnTurnChanged?.Invoke();
     }
@@ -662,6 +699,23 @@ public class GameManager : MonoBehaviour
         int fEnd = fStart;
         while (fEnd < userObj.Length && (char.IsDigit(userObj[fEnd]) || userObj[fEnd] == '-')) fEnd++;
         return int.TryParse(userObj.Substring(fStart, fEnd - fStart), out int val) ? val : 0;
+    }
+
+    private string ParseStringField(string stateJson, string userId, string field)
+    {
+        if (string.IsNullOrEmpty(userId)) return "";
+        string userMarker = "\"" + userId + "\":{";
+        int uStart = stateJson.IndexOf(userMarker);
+        if (uStart == -1) return "";
+        int depth = 0, i = uStart + userMarker.Length - 1, uEnd = i;
+        while (i < stateJson.Length)
+        {
+            if (stateJson[i] == '{') depth++;
+            else if (stateJson[i] == '}') { depth--; if (depth == 0) { uEnd = i; break; } }
+            i++;
+        }
+        string userObj = stateJson.Substring(uStart + userMarker.Length - 1, uEnd - (uStart + userMarker.Length - 1) + 1);
+        return ExtractStringValue(userObj, field);
     }
 
     private string ExtractArray(string json, string key)

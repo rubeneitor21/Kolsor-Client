@@ -71,7 +71,6 @@ public class GodInfoCard : MonoBehaviour
         // Textos de cabecera
         titleText.text = info.DisplayName;
         descText.text = info.Description;
-        priorityText.text = $"Prioridad: {info.Priority}";
 
         // Tier más alto que puedo pagar (0 = ninguno)
         int activeTier = GodData.GetAffordableTier(godName, myEnergy);

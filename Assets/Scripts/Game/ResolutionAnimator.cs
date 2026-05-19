@@ -26,6 +26,21 @@ public class ResolutionAnimator : MonoBehaviour
 
     public System.Action OnAnimationComplete;
 
+    /// Dispara una flecha desde `from` hasta `to` con arco. Reutilizable por otros sistemas.
+    public IEnumerator FireArrowAt(Vector3 from, Vector3 to, bool attackerIsPlayer)
+        => FireWeaponAt(DiceFace.Arrow, from, to, attackerIsPlayer, useArc: true);
+
+    /// Dispara un arma genérica (hacha o flecha) de `from` a `to`.
+    public IEnumerator FireWeaponAt(DiceFace face, Vector3 from, Vector3 to, bool attackerIsPlayer, bool useArc)
+    {
+        var prefab = face == DiceFace.Axe ? axePrefab : arrowPrefab;
+        var weapon = SpawnWeapon(prefab, from, GetWeaponRotation(face, attackerIsPlayer));
+        if (useArc) yield return FlyToArc(weapon, to);
+        else yield return FlyTo(weapon, to);
+        yield return new WaitForSeconds(impactPauseSecs);
+        if (weapon != null) Destroy(weapon);
+    }
+
     void Awake()
     {
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
@@ -37,6 +52,7 @@ public class ResolutionAnimator : MonoBehaviour
     private class AttackEvent
     {
         public float sortZ;
+        public int order;   // 0=bloqueado, 1=sin bloquear original, 2=extra multiplicador
         public GameObject attackerDiceObj;
         public GameObject defenderDiceObj;
         public GameObject projectilePfb;
@@ -104,7 +120,9 @@ public class ResolutionAnimator : MonoBehaviour
     public IEnumerator PlayResolution(
         List<DiceData> startDice, List<DiceData> secondDice,
         List<GameObject> startObjs, List<GameObject> secondObjs,
-        bool iAmStart)
+        bool iAmStart,
+        int startAxeMult = 1, int startArrowMult = 1,
+        int secondAxeMult = 1, int secondArrowMult = 1)
     {
         var bm = BoardManager.Instance;
         if (bm == null) { OnAnimationComplete?.Invoke(); yield break; }
@@ -116,45 +134,63 @@ public class ResolutionAnimator : MonoBehaviour
         bool startIsPlayer = iAmStart;
         bool secondIsPlayer = !iAmStart;
 
-        // Flechas start vs Escudos second
-        CollectZone(startIdx[DiceFace.Arrow], startObjs, arrowPrefab, DiceFace.Arrow,
+        // Índices originales para blocking; los ataques extra (multiplicados) son imparables
+        var startAxeOrig = startIdx[DiceFace.Axe];
+        var startArrowOrig = startIdx[DiceFace.Arrow];
+        var secondAxeOrig = secondIdx[DiceFace.Axe];
+        var secondArrowOrig = secondIdx[DiceFace.Arrow];
+
+        // Flechas start vs Escudos second (solo originales bloqueables)
+        CollectZone(startArrowOrig, startObjs, arrowPrefab, DiceFace.Arrow,
                     secondIdx[DiceFace.Shield], secondObjs, shieldPrefab, DiceFace.Shield,
                     targetIsPlayer: !iAmStart, attackerIsPlayer: startIsPlayer, events);
-
-        int arrowsBlocked = Mathf.Min(startIdx[DiceFace.Arrow].Count, secondIdx[DiceFace.Shield].Count);
-        for (int i = arrowsBlocked; i < startIdx[DiceFace.Arrow].Count; i++)
-            CollectAttack(startIdx[DiceFace.Arrow][i], startObjs, arrowPrefab, DiceFace.Arrow,
+        int arrowsBlocked = Mathf.Min(startArrowOrig.Count, secondIdx[DiceFace.Shield].Count);
+        for (int i = arrowsBlocked; i < startArrowOrig.Count; i++)
+            CollectAttack(startArrowOrig[i], startObjs, arrowPrefab, DiceFace.Arrow,
                           true, targetIsPlayer: !iAmStart, attackerIsPlayer: startIsPlayer, events);
+        for (int ex = 1; ex < startArrowMult; ex++)
+            foreach (int idx in startArrowOrig)
+                CollectAttack(idx, startObjs, arrowPrefab, DiceFace.Arrow,
+                              true, targetIsPlayer: !iAmStart, attackerIsPlayer: startIsPlayer, events, order: 2);
 
-        // Hachas start vs Cascos second
-        CollectZone(startIdx[DiceFace.Axe], startObjs, axePrefab, DiceFace.Axe,
+        // Hachas start vs Cascos second (solo originales bloqueables)
+        CollectZone(startAxeOrig, startObjs, axePrefab, DiceFace.Axe,
                     secondIdx[DiceFace.Helmet], secondObjs, helmetPrefab, DiceFace.Helmet,
                     targetIsPlayer: !iAmStart, attackerIsPlayer: startIsPlayer, events);
-
-        int axesBlocked = Mathf.Min(startIdx[DiceFace.Axe].Count, secondIdx[DiceFace.Helmet].Count);
-        for (int i = axesBlocked; i < startIdx[DiceFace.Axe].Count; i++)
-            CollectAttack(startIdx[DiceFace.Axe][i], startObjs, axePrefab, DiceFace.Axe,
+        int axesBlocked = Mathf.Min(startAxeOrig.Count, secondIdx[DiceFace.Helmet].Count);
+        for (int i = axesBlocked; i < startAxeOrig.Count; i++)
+            CollectAttack(startAxeOrig[i], startObjs, axePrefab, DiceFace.Axe,
                           true, targetIsPlayer: !iAmStart, attackerIsPlayer: startIsPlayer, events);
+        for (int ex = 1; ex < startAxeMult; ex++)
+            foreach (int idx in startAxeOrig)
+                CollectAttack(idx, startObjs, axePrefab, DiceFace.Axe,
+                              true, targetIsPlayer: !iAmStart, attackerIsPlayer: startIsPlayer, events, order: 2);
 
-        // Flechas second vs Escudos start
-        CollectZone(secondIdx[DiceFace.Arrow], secondObjs, arrowPrefab, DiceFace.Arrow,
+        // Flechas second vs Escudos start (solo originales bloqueables)
+        CollectZone(secondArrowOrig, secondObjs, arrowPrefab, DiceFace.Arrow,
                     startIdx[DiceFace.Shield], startObjs, shieldPrefab, DiceFace.Shield,
                     targetIsPlayer: iAmStart, attackerIsPlayer: secondIsPlayer, events);
-
-        int arrowsBlocked2 = Mathf.Min(secondIdx[DiceFace.Arrow].Count, startIdx[DiceFace.Shield].Count);
-        for (int i = arrowsBlocked2; i < secondIdx[DiceFace.Arrow].Count; i++)
-            CollectAttack(secondIdx[DiceFace.Arrow][i], secondObjs, arrowPrefab, DiceFace.Arrow,
+        int arrowsBlocked2 = Mathf.Min(secondArrowOrig.Count, startIdx[DiceFace.Shield].Count);
+        for (int i = arrowsBlocked2; i < secondArrowOrig.Count; i++)
+            CollectAttack(secondArrowOrig[i], secondObjs, arrowPrefab, DiceFace.Arrow,
                           true, targetIsPlayer: iAmStart, attackerIsPlayer: secondIsPlayer, events);
+        for (int ex = 1; ex < secondArrowMult; ex++)
+            foreach (int idx in secondArrowOrig)
+                CollectAttack(idx, secondObjs, arrowPrefab, DiceFace.Arrow,
+                              true, targetIsPlayer: iAmStart, attackerIsPlayer: secondIsPlayer, events, order: 2);
 
-        // Hachas second vs Cascos start
-        CollectZone(secondIdx[DiceFace.Axe], secondObjs, axePrefab, DiceFace.Axe,
+        // Hachas second vs Cascos start (solo originales bloqueables)
+        CollectZone(secondAxeOrig, secondObjs, axePrefab, DiceFace.Axe,
                     startIdx[DiceFace.Helmet], startObjs, helmetPrefab, DiceFace.Helmet,
                     targetIsPlayer: iAmStart, attackerIsPlayer: secondIsPlayer, events);
-
-        int axesBlocked2 = Mathf.Min(secondIdx[DiceFace.Axe].Count, startIdx[DiceFace.Helmet].Count);
-        for (int i = axesBlocked2; i < secondIdx[DiceFace.Axe].Count; i++)
-            CollectAttack(secondIdx[DiceFace.Axe][i], secondObjs, axePrefab, DiceFace.Axe,
+        int axesBlocked2 = Mathf.Min(secondAxeOrig.Count, startIdx[DiceFace.Helmet].Count);
+        for (int i = axesBlocked2; i < secondAxeOrig.Count; i++)
+            CollectAttack(secondAxeOrig[i], secondObjs, axePrefab, DiceFace.Axe,
                           true, targetIsPlayer: iAmStart, attackerIsPlayer: secondIsPlayer, events);
+        for (int ex = 1; ex < secondAxeMult; ex++)
+            foreach (int idx in secondAxeOrig)
+                CollectAttack(idx, secondObjs, axePrefab, DiceFace.Axe,
+                              true, targetIsPlayer: iAmStart, attackerIsPlayer: secondIsPlayer, events, order: 2);
 
         // Manos start
         foreach (int idx in startIdx[DiceFace.Hand])
@@ -182,16 +218,28 @@ public class ResolutionAnimator : MonoBehaviour
             });
         }
 
-        events.Sort((a, b) => b.sortZ.CompareTo(a.sortZ));
+        events.Sort((a, b) => {
+            int z = b.sortZ.CompareTo(a.sortZ);
+            return z != 0 ? z : a.order.CompareTo(b.order);
+        });
+
+        // Contar eventos por dado atacante para no animarlo hasta su último ataque
+        var atkCounts = new Dictionary<GameObject, int>();
+        foreach (var ev in events)
+        {
+            if (ev.isHandEffect || ev.attackerDiceObj == null) continue;
+            if (!atkCounts.ContainsKey(ev.attackerDiceObj))
+                atkCounts[ev.attackerDiceObj] = 0;
+            atkCounts[ev.attackerDiceObj]++;
+        }
 
         foreach (var ev in events)
         {
             if (ev.isHandEffect)
                 yield return AnimateHandEffect(ev.attackerDiceObj, ev.handTargetIsPlayer, bm);
             else
-                yield return ExecuteEvent(ev, bm);
+                yield return ExecuteEvent(ev, bm, atkCounts);
 
-            // Si algún jugador se queda sin piedras → terminar animación ahora mismo
             if (bm.GetPlayerStones().Count == 0 || bm.GetOpponentStones().Count == 0)
             {
                 OnAnimationComplete?.Invoke();
@@ -227,7 +275,8 @@ public class ResolutionAnimator : MonoBehaviour
                 targetIsPlayer = targetIsPlayer,
                 attackerIsPlayer = attackerIsPlayer,
                 attackerFace = atkFace,
-                defenderFace = defFace
+                defenderFace = defFace,
+                order = 0
             });
         }
     }
@@ -235,7 +284,7 @@ public class ResolutionAnimator : MonoBehaviour
     private void CollectAttack(
         int atkIdx, List<GameObject> atkObjs, GameObject atkPfb, DiceFace atkFace,
         bool attacksStone, bool targetIsPlayer, bool attackerIsPlayer,
-        List<AttackEvent> events)
+        List<AttackEvent> events, int order = 1)
     {
         var atkObj = atkIdx < atkObjs.Count ? atkObjs[atkIdx] : null;
         if (atkObj == null) return;
@@ -248,13 +297,14 @@ public class ResolutionAnimator : MonoBehaviour
             isHandEffect = false,
             targetIsPlayer = targetIsPlayer,
             attackerIsPlayer = attackerIsPlayer,
-            attackerFace = atkFace
+            attackerFace = atkFace,
+            order = order
         });
     }
 
     // ── Ejecución de un evento ───────────────────────────────────────────────
 
-    private IEnumerator ExecuteEvent(AttackEvent ev, BoardManager bm)
+    private IEnumerator ExecuteEvent(AttackEvent ev, BoardManager bm, Dictionary<GameObject, int> atkCounts)
     {
         if (ev.attackerDiceObj == null) yield break;
 
@@ -306,7 +356,17 @@ public class ResolutionAnimator : MonoBehaviour
             }
         }
 
-        StartCoroutine(AnimateDiceReturn(ev.attackerDiceObj));
+        // Solo animar el dado cuando es su último evento (puede tener varios con Brunhild/Skadi)
+        if (ev.attackerDiceObj != null)
+        {
+            bool isLastEvent = true;
+            if (atkCounts.ContainsKey(ev.attackerDiceObj))
+            {
+                atkCounts[ev.attackerDiceObj]--;
+                isLastEvent = atkCounts[ev.attackerDiceObj] <= 0;
+            }
+            if (isLastEvent) StartCoroutine(AnimateDiceReturn(ev.attackerDiceObj));
+        }
         if (ev.defenderDiceObj != null)
             StartCoroutine(AnimateDiceReturn(ev.defenderDiceObj));
 
@@ -431,6 +491,16 @@ public class ResolutionAnimator : MonoBehaviour
         for (int i = list.Count - 1; i >= 0; i--)
             if (list[i] != null) return list[i];
         return null;
+    }
+
+    /// Repite los índices 'mult' veces en round-robin: [0,1]×2 → [0,1,0,1]
+    private static List<int> ExpandIndices(List<int> orig, int mult)
+    {
+        if (mult <= 1 || orig.Count == 0) return orig;
+        var result = new List<int>(orig.Count * mult);
+        for (int round = 0; round < mult; round++)
+            foreach (int idx in orig) result.Add(idx);
+        return result;
     }
 
     private static Dictionary<DiceFace, List<int>> GetIndicesByType(List<DiceData> dice)

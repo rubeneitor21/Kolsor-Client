@@ -86,12 +86,11 @@ public class BoardManager : MonoBehaviour
     private List<GameObject> _enemyGodObjects = new();
     private List<GameObject> _myTokenObjects = new();
     private List<GameObject> _enemyTokenObjects = new();
-    // Mapa nombre de dios → índice de prefab en godPrefabs[]
+    // Mapa nombre de dios → índice de prefab en godPrefabs[]  (4 dioses)
     private static readonly System.Collections.Generic.Dictionary<string, int> GodPrefabIndex =
         new System.Collections.Generic.Dictionary<string, int>
     {
-        {"BrunhildsFury", 0}, {"SkadisHunt", 1}, {"ThorsStrike", 2}, {"LokisTrick",    3},
-        {"BragisVerve",   4}, {"IdunsRejuvenat", 5}, {"MimirsWisdom", 6}, {"VarsBond", 7}
+        { "ThorsStrike", 0 }, { "BrunhildsFury", 1 }, { "SkadisHunt", 2 }, { "IdunsRejuvenat", 3 }
     };
 
     // Orden de seleccion: indices de _myBowlObjects en el orden en que el jugador los selecciono.
@@ -303,30 +302,37 @@ public class BoardManager : MonoBehaviour
     /// Animación de mi tirada con caras reales finales.
     public IEnumerator AnimateMyRoll(List<DiceData> finalDice)
     {
-        // Si el cuenco aún tiene decorativos, los reusamos.
-        // Si está vacío (caso típico tras una confirmación), los creamos.
-        if (_myBowlObjects.Count == 0)
+        // Filtrar solo los dados que deben tirarse (no están kept en el preview row).
+        // Los dados kept se quedan donde están; animarlos causaría conflictos de posición.
+        // Limpiar referencias destruidas de la lista antes de usarla
+        _myBowlObjects.RemoveAll(obj => obj == null);
+
+        var rollObjs = new List<GameObject>();
+        foreach (var obj in _myBowlObjects)
         {
-            for (int i = 0; i < finalDice.Count && i < BowlOffsets.Length; i++)
-            {
-                var startData = new DiceData
-                {
-                    face = AllFaces[Random.Range(0, AllFaces.Length)],
-                    energy = false
-                };
-                Vector3 pos = myBowlCenter.position + BowlOffsets[i] + Vector3.up * 0.3f;
-                _myBowlObjects.Add(SpawnDice(startData, pos, isMine: true, decorative: true));
-            }
+            var ctrl = obj.GetComponent<DiceController>();
+            if (ctrl != null && ctrl.Data != null && ctrl.Data.kept) continue;
+            rollObjs.Add(obj);
         }
 
-        yield return AnimateBowl(_myBowlObjects, myBowlCenter, finalDice);
-
-        // Tras la animación, los dados ya tienen las caras reales.
-        // Ahora hay que conectarles el DiceData real para que sean clicables.
-        for (int i = 0; i < _myBowlObjects.Count && i < finalDice.Count; i++)
+        // Si no hay suficientes objetos libres, crear los que falten
+        while (rollObjs.Count < finalDice.Count && rollObjs.Count < BowlOffsets.Length)
         {
-            var ctrl = _myBowlObjects[i].GetComponent<DiceController>();
-            if (ctrl == null) ctrl = _myBowlObjects[i].AddComponent<DiceController>();
+            var startData = new DiceData { face = AllFaces[Random.Range(0, AllFaces.Length)], energy = false };
+            int idx = rollObjs.Count;
+            Vector3 pos = myBowlCenter.position + BowlOffsets[idx] + Vector3.up * 0.3f;
+            var newObj = SpawnDice(startData, pos, isMine: true, decorative: true);
+            rollObjs.Add(newObj);
+            _myBowlObjects.Add(newObj);
+        }
+
+        yield return AnimateBowl(rollObjs, myBowlCenter, finalDice);
+
+        // Conectar DiceData real a cada objeto que se tiró
+        for (int i = 0; i < rollObjs.Count && i < finalDice.Count; i++)
+        {
+            var ctrl = rollObjs[i].GetComponent<DiceController>();
+            if (ctrl == null) ctrl = rollObjs[i].AddComponent<DiceController>();
             ctrl.enabled = true;
             ctrl.Init(finalDice[i]);
             Vector3 basePos = myBowlCenter.position + BowlOffsets[i] + Vector3.up * 0.3f;
@@ -561,7 +567,7 @@ public class BoardManager : MonoBehaviour
 
         Debug.Log($"[Board] SpawnGodFigures | prefabs={godPrefabs?.Length} | MyGods={string.Join(",", GameData.MySelectedGods ?? new string[0])} | EnemyGods={string.Join(",", GameData.OpponentSelectedGods ?? new string[0])}");
 
-        if (godPrefabs == null || godPrefabs.Length < 8) { Debug.LogWarning("[Board] godPrefabs no asignados o faltan prefabs"); return; }
+        if (godPrefabs == null || godPrefabs.Length < 4) { Debug.LogWarning("[Board] godPrefabs no asignados o faltan prefabs (se necesitan 4)"); return; }
 
         string[] myGods = GameData.MySelectedGods;
         string[] enemyGods = GameData.OpponentSelectedGods;
@@ -667,6 +673,19 @@ public class BoardManager : MonoBehaviour
             token.transform.localScale = Vector3.one;
             list.Add(token);
         }
+    }
+
+    /// Devuelve la posición de la figura de un dios concreto, o null si no existe.
+    public Vector3? GetGodFigurePosition(string godName, bool isMyGod)
+    {
+        var list = isMyGod ? _myGodObjects : _enemyGodObjects;
+        foreach (var obj in list)
+        {
+            if (obj == null) continue;
+            var ctrl = obj.GetComponent<GodFavorController>();
+            if (ctrl != null && ctrl.GodName == godName) return obj.transform.position;
+        }
+        return null;
     }
 
     public void ClearGodFigures()
@@ -782,10 +801,45 @@ public class BoardManager : MonoBehaviour
 
         yield return new WaitForSeconds(0.5f);
 
-        // Animación de armas
+        string startGod = iAmStart ? gm.MyInvokedGod : gm.OpponentInvokedGod;
+        string secondGod = iAmStart ? gm.OpponentInvokedGod : gm.MyInvokedGod;
+        int startTier = iAmStart ? gm.MyInvokedGodTier : gm.OpponentInvokedGodTier;
+        int secondTier = iAmStart ? gm.OpponentInvokedGodTier : gm.MyInvokedGodTier;
+
+        // PRE-armas: Brunhild y Skadi (halos + dados extra)
+        if (GodFavorAnimator.Instance != null)
+            yield return GodFavorAnimator.Instance.PlayPreWeaponAnimations(
+                startGod, startTier, secondGod, secondTier,
+                startDice, secondDice, startObjs, secondObjs, iAmStart);
+
+        // Guardar y anular OnAnimationComplete para que PlayResolution no lo dispare solo.
+        System.Action savedCallback = null;
+        if (ResolutionAnimator.Instance != null)
+        {
+            savedCallback = ResolutionAnimator.Instance.OnAnimationComplete;
+            ResolutionAnimator.Instance.OnAnimationComplete = null;
+        }
+
+        // Multiplicadores de Brunhild (hachas) y Skadi (flechas)
+        int startAxeMult = startGod == "BrunhildsFury" ? Mathf.Max(2, startTier + 1) : 1;
+        int startArrowMult = startGod == "SkadisHunt" ? Mathf.Max(2, startTier + 1) : 1;
+        int secondAxeMult = secondGod == "BrunhildsFury" ? Mathf.Max(2, secondTier + 1) : 1;
+        int secondArrowMult = secondGod == "SkadisHunt" ? Mathf.Max(2, secondTier + 1) : 1;
+
+        // Animación de armas (con multiplicadores integrados)
         if (ResolutionAnimator.Instance != null)
             yield return ResolutionAnimator.Instance.PlayResolution(
+                startDice, secondDice, startObjs, secondObjs, iAmStart,
+                startAxeMult, startArrowMult, secondAxeMult, secondArrowMult);
+
+        // POST-armas: Brunhild/Skadi extra weapons + Thor + Idun
+        if (GodFavorAnimator.Instance != null)
+            yield return GodFavorAnimator.Instance.PlayPostWeaponAnimations(
+                startGod, startTier, secondGod, secondTier,
                 startDice, secondDice, startObjs, secondObjs, iAmStart);
+
+        // Disparar el callback (SpawnStones + ExecuteRoundStart / ExecuteGameOver)
+        savedCallback?.Invoke();
 
         yield return new WaitForSeconds(0.5f);
     }
@@ -943,6 +997,49 @@ public class BoardManager : MonoBehaviour
         renderer.materials = mats;
         ApplyEnergyHalo(obj, data.energy);
     }
+    /// Igual que ApplyEnergyHalo pero en rojo. Devuelve el GameObject creado (o null).
+    public GameObject ApplyGodHalo(GameObject diceObj)
+    {
+        var diceRenderer = diceObj.GetComponent<Renderer>()
+                        ?? diceObj.GetComponentInChildren<Renderer>();
+        if (diceRenderer == null) return null;
+
+        var meshObj = diceRenderer.gameObject;
+        var halo = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        halo.name = "GodHalo";
+        halo.transform.SetParent(meshObj.transform, worldPositionStays: false);
+        halo.transform.localPosition = Vector3.zero;
+        halo.transform.localRotation = Quaternion.identity;
+
+        var bounds = diceRenderer.bounds;
+        float worldSize = Mathf.Max(bounds.size.x, bounds.size.y, bounds.size.z) * 1.08f;
+        Vector3 ps = meshObj.transform.lossyScale;
+        halo.transform.localScale = new Vector3(
+            worldSize / ps.x, worldSize / ps.y, worldSize / ps.z);
+
+        var col = halo.GetComponent<Collider>();
+        if (col != null) Destroy(col);
+
+        var mat = new Material(diceRenderer.material);
+        mat.mainTexture = null;
+        mat.SetFloat("_Surface", 1f);
+        mat.SetFloat("_Blend", 3f);
+        mat.SetFloat("_ZWrite", 0f);
+        mat.SetFloat("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+        mat.SetFloat("_DstBlend", (int)UnityEngine.Rendering.BlendMode.One);
+        mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+        mat.renderQueue = 3001;
+        mat.color = new Color(1f, 0.1f, 0.05f, 0.15f);          // rojo
+        mat.EnableKeyword("_EMISSION");
+        mat.SetColor("_EmissionColor", new Color(1f, 0.05f, 0f) * 1.5f); // emisión roja
+
+        var rend = halo.GetComponent<Renderer>();
+        rend.material = mat;
+        rend.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        rend.receiveShadows = false;
+        return halo;
+    }
+
     private void ApplyEnergyHalo(GameObject diceObj, bool hasEnergy)
     {
         Transform existing = diceObj.transform.Find("EnergyHalo");
@@ -1037,6 +1134,35 @@ public class BoardManager : MonoBehaviour
                 index++;
             }
         }
+    }
+
+    /// Añade piedras de curación a la lista real (persisten durante la animación).
+    /// Máximo 15 piedras en total. Devuelve los objetos creados.
+    public List<GameObject> SpawnHealStones(bool isPlayer, int count)
+    {
+        var list = isPlayer ? _playerStones : _opponentStones;
+        var origin = isPlayer ? playerStonesOrigin : opponentStonesOrigin;
+        var result = new List<GameObject>();
+        if (stonePrefab == null || origin == null) return result;
+
+        int toAdd = Mathf.Min(count, 15 - list.Count);
+        int columns = 3;
+        float spacingX = 0.32f;
+        float spacingZ = 0.32f;
+
+        for (int i = 0; i < toAdd; i++)
+        {
+            int idx = list.Count;
+            int col = idx % columns;
+            int row = idx / columns;
+            Vector3 pos = origin.position
+                + Vector3.right * col * spacingX
+                + Vector3.forward * row * spacingZ;
+            var s = Instantiate(stonePrefab, pos, Quaternion.Euler(90f, 0f, 0f));
+            list.Add(s);
+            result.Add(s);
+        }
+        return result;
     }
 
     private void ClearStones()
